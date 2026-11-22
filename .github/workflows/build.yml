@@ -1,0 +1,95 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tes logika firmware di PC
+        run: |
+          g++ -std=c++17 -Wall -Wextra -fsanitize=address,undefined -o test_logic firmware/test/test_logic.cpp
+          ./test_logic
+      - name: Tes integrasi aplikasi ke logika firmware (TCP)
+        run: |
+          pip install PySide6
+          g++ -std=c++17 -include vector -o /tmp/sim firmware/test/sim.cpp
+          sudo apt-get update -y && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+          cd app && RFC_SIM=/tmp/sim QT_QPA_PLATFORM=offscreen python tests/test_link.py
+      - name: Pasang PlatformIO
+        run: pip install platformio
+      - name: Build firmware ESP32-S3
+        working-directory: firmware
+        run: pio run
+      - name: Gabungkan jadi satu file .bin (alamat 0x0)
+        working-directory: firmware
+        run: |
+          pip install esptool
+          B=.pio/build/esp32s3
+          BOOT=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
+          python -m esptool --chip esp32s3 merge_bin -o rf-controller-merged.bin \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT" 0x10000 $B/firmware.bin
+          ls -l rf-controller-merged.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: firmware/rf-controller-merged.bin
+
+  app:
+    needs: firmware
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: app/fw
+      - name: Pasang dependensi
+        working-directory: app
+        run: pip install -r requirements-dev.txt
+      - name: Buat ikon
+        run: python tools/make_icon.py
+      - name: Tes UI (tanpa layar)
+        working-directory: app
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tests/test_ui.py
+      - name: Bungkus jadi satu file exe
+        working-directory: app
+        shell: bash
+        run: |
+          cp ../firmware/src/params.def rfc/params.def
+          pyinstaller --noconsole --onefile --name RFController \
+            --icon assets/icon.ico \
+            --add-data "rfc/params.def;rfc" \
+            --add-data "assets;assets" \
+            --add-data "fw;fw" \
+            --hidden-import PySide6.QtBluetooth \
+            --hidden-import PySide6.QtNetwork \
+            --hidden-import PySide6.QtSerialPort \
+            --collect-submodules esptool \
+            --collect-data esptool \
+            main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RFController-windows
+          path: app/dist/RFController.exe
+      - name: Rilis (saat tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/dist/RFController.exe
+            app/fw/rf-controller-merged.bin

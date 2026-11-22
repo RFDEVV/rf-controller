@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pio/
+build/
+dist/
+app/fw/
+app/rfc/params.def
+*.spec
