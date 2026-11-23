@@ -152,11 +152,13 @@ class PulseLab(Page):
                 rg.v.addWidget(PSpin(s, k, t, " µs"))
             rg.v.addWidget(PSlider(s, "nb%d" % n, "Pita netral (± dari tengah)", "µs"))
             rg.v.addWidget(PSlider(s, "dz%d" % n, "Zona mati", "%"))
-            rg.v.addWidget(PSlider(s, "flt%d" % n, "Penghalus sinyal", "%"))
+            rg.v.addWidget(PSlider(s, "flt%d" % n, "Peredam noise / penghalus", "%"))
             rg.v.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
         for n, name in ((3, "CH3 tombol"), (4, "CH4 tombol")):
             rg.v.addWidget(label(name, "h2"))
-            rg.v.addWidget(PSeg(s, "c%d_type" % n, [("Ditahan (momentary)", 0), ("Bergantian tiap tekan", 1)]))
+            rg.v.addWidget(PSeg(s, "c%d_type" % n, [
+                ("Ditahan", 0), ("Pulsa sekali", 1), ("Toggle", 2),
+            ]))
             rg.v.addWidget(PSpin(s, "c%d_thr" % n, "Ambang rendah/tinggi", " µs"))
         rg.v.addWidget(label("Semua channel", "h2"))
         rg.v.addWidget(PSlider(s, "btn_hys", "Histeresis tombol (± dari ambang)", "µs"))

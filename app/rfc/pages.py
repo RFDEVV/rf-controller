@@ -3,7 +3,8 @@ import json
 import os
 import time
 
-from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget,
                                QComboBox)
@@ -62,6 +63,69 @@ def row2(a, b, ratio=(1, 1)):
 
 
 # =============================================================== Dashboard
+class RemoteMap(QWidget):
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.pulses = [0, 0, 0, 0]
+        self.setMinimumHeight(138)
+        self.setToolTip("Peta fungsi channel remot")
+        theme.changed.connect(self.update)
+
+    def set_pulses(self, pulses):
+        self.pulses = pulses
+        self.update()
+
+    def paintEvent(self, _):
+        c = self.theme.c
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        mid = h / 2
+        body = QRectF(self.rect()).adjusted(w * 0.415, 20, -w * 0.415, -20)
+        p.setPen(QPen(QColor(c["border"]), 1.5))
+        p.setBrush(QColor(c["surface2"]))
+        p.drawRoundedRect(body, 18, 18)
+        wheel = body.center().x() - 13
+        p.setPen(QPen(QColor(c["accent"]), 3))
+        p.drawEllipse(QRectF(wheel - 16, mid - 16, 32, 32))
+        p.setPen(QPen(QColor(c["muted"]), 2))
+        p.drawLine(QPointF(wheel, mid - 13), QPointF(wheel, mid + 13))
+        p.drawLine(QPointF(wheel - 12, mid), QPointF(wheel + 12, mid))
+        p.setPen(QPen(QColor(c["amber"]), 4, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(body.right() - 20, mid - 25), QPointF(body.right() - 20, mid + 3))
+        for i, key in enumerate(("teal", "rose")):
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(c[key]))
+            p.drawEllipse(QPointF(body.right() - 20, mid + 20 + i * 13), 4, 4)
+
+        font = p.font()
+        font.setPixelSize(10)
+        p.setFont(font)
+        entries = [
+            (0, "CH1  Setir", c["accent"], 4, mid - 22, wheel - 18, mid - 5, Qt.AlignLeft),
+            (2, "CH3  Klik 1/2/3", c["teal"], 4, mid + 29, body.right() - 22, mid + 20, Qt.AlignLeft),
+            (1, "CH2  Gas / rem", c["amber"], w - 122, mid - 22, body.right() - 18, mid - 16, Qt.AlignRight),
+            (3, "CH4  Klik / tahan", c["rose"], w - 122, mid + 29, body.right() - 20, mid + 33, Qt.AlignRight),
+        ]
+        for idx, text, color, tx, ty, ex, ey, align in entries:
+            pulse = "—" if not self.pulses[idx] else "%d µs" % self.pulses[idx]
+            p.setPen(QColor(color))
+            p.drawText(QRectF(tx, ty - 12, 118, 15), align | Qt.AlignVCenter, text)
+            p.setPen(QColor(c["muted"]))
+            p.drawText(QRectF(tx, ty + 2, 118, 14), align | Qt.AlignVCenter, pulse)
+            start_x = tx + 118 if align == Qt.AlignLeft else tx
+            p.setPen(QPen(QColor(color), 1.4))
+            p.drawLine(QPointF(start_x, ty + 5), QPointF(ex, ey))
+            p.setBrush(QColor(color))
+            direction = 1 if ex > start_x else -1
+            arrow = QPainterPath(QPointF(ex, ey))
+            arrow.lineTo(ex - direction * 6, ey - 3)
+            arrow.lineTo(ex - direction * 6, ey + 3)
+            arrow.closeSubpath()
+            p.drawPath(arrow)
+
+
 class Dashboard(Page):
     title = "Dashboard"
     subtitle = "Pantau remot secara langsung"
@@ -72,6 +136,8 @@ class Dashboard(Page):
         left = Card()
         self.dial = W.GearDial()
         left.v.addWidget(self.dial, 1)
+        self.remote = RemoteMap(ctx.theme)
+        left.v.addWidget(self.remote)
         chips = QHBoxLayout()
         self.b_mode = QPushButton("Gigi: otomatis")
         self.b_lock = QPushButton("Kunci gigi")
@@ -137,6 +203,7 @@ class Dashboard(Page):
         s = self.ctx.store
         self.scope.push(d["p"], d["sig"])
         self.last_p = d["p"]
+        self.remote.set_pulses(d["p"])
         gm = s.get("gear_mode")
         th = [s.get("g_t%d" % i) for i in range(1, s.get("g_max") + 1)] if gm == 1 else []
         self.dial.set_state(d["gas"], d["brk"], d["gear"], d["st"], bool(d["rev"]), bool(d["lock"]), th)
@@ -187,7 +254,9 @@ class ChannelCard(Card):
                 self.v.addWidget(PSpin(s, k, t, " µs"))
             self.v.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
         else:
-            self.v.addWidget(PSeg(s, "c%d_type" % n, [("Ditahan (momentary)", 0), ("Bergantian tiap tekan", 1)]))
+            self.v.addWidget(PSeg(s, "c%d_type" % n, [
+                ("Ditahan", 0), ("Pulsa sekali", 1), ("Toggle", 2),
+            ]))
             self.v.addWidget(PSpin(s, "c%d_thr" % n, "Ambang tinggi/rendah", " µs"))
             row = QHBoxLayout()
             self.low, self.high = None, None
@@ -270,7 +339,7 @@ class Calibration(Page):
 # =============================================================== Setir & Gas
 class SteerThrottle(Page):
     title = "Setir dan gas"
-    subtitle = "Zona mati, kurva respons, dan logika rem/mundur"
+    subtitle = "Zona mati, peredam noise, kurva respons, dan logika rem/mundur"
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -282,9 +351,11 @@ class SteerThrottle(Page):
             cv.setFixedWidth(210)
             self.curves.append(cv)
             f = QVBoxLayout()
-            f.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
+            f.addWidget(PSwitch(s, "inv%d" % n, "Balik arah gas / rem" if n == 2 else "Balik arah setir"))
             f.addWidget(PSlider(s, "dz%d" % n, "Zona mati", "%"))
             f.addWidget(PSlider(s, "ex%d" % n, "Kurva halus (ekspo)", "%"))
+            f.addWidget(PSlider(s, "flt%d" % n, "Peredam noise", "%"))
+            f.addWidget(PSlider(s, "nb%d" % n, "Pita netral anti-noise", "µs"))
             f.addWidget(PSlider(s, lim, "Batas maksimum", "%"))
             h = QHBoxLayout()
             h.setSpacing(18)
@@ -359,17 +430,19 @@ class Buttons(Page):
     def __init__(self, ctx):
         super().__init__(ctx)
         s = ctx.store
-        c3 = Card("CH3  (pulsa bergantian tiap penekanan)")
+        c3 = Card("CH3  (tombol / pulsa)")
         c3.v.addWidget(PAction(s, "a_c3_1", "Klik 1x"))
         c3.v.addWidget(PAction(s, "a_c3_2", "Klik 2x"))
         c3.v.addWidget(PAction(s, "a_c3_3", "Klik 3x"))
-        c3.v.addWidget(label("Jenis dan ambang CH3 diatur di menu Pulsa dan kalibrasi. Tahan lama tidak bisa dibaca di CH3 karena pulsanya bergantian.", "muted", True))
+        c3.v.addWidget(label("Pilih mode pulsa untuk hitung satu klik saat sinyal naik, atau mode toggle jika remot mengubah level tiap tekanan. Jenis dan ambang di menu Deteksi pulsa.", "muted", True))
         self.col.addWidget(c3)
-        c4 = Card("CH4  (tombol, pulsa naik selama ditahan)")
+        c4 = Card("CH4  (tombol / pulsa)")
         c4.v.addWidget(PAction(s, "a_c4_1", "Klik 1x"))
         c4.v.addWidget(PAction(s, "a_c4_2", "Klik 2x"))
         c4.v.addWidget(PAction(s, "a_c4_3", "Klik 3x"))
         c4.v.addWidget(PAction(s, "a_c4_l", "Tahan lama"))
+        c4.v.addWidget(label("Mode momentary membaca klik dan tahan. Mode pulsa membaca satu klik tiap pulsa naik; mode toggle membaca setiap perubahan level.", "muted", True))
+        c4.v.addWidget(label("Preset Gamepad balap memetakan CH3/CH4 ke tombol gamepad A/B/X/Y, LB/RB, dan Start. Pemetaan ini tidak mengirim tombol keyboard.", "muted", True))
         self.col.addWidget(c4)
         tm = Card("Waktu gestur")
         tm.v.addWidget(PSlider(s, "click_ms", "Jeda antar klik", "ms"))
@@ -405,8 +478,8 @@ class Output(Page):
     subtitle = "Pilih cara ESP32 tampil di PC"
 
     DESC = [
-        "Gamepad: setir jadi stik kiri, gas jadi pedal kanan, rem jadi pedal kiri. Dikenali sebagai gamepad HID generik. Sebagian game hanya mengenali gamepad gaya Xbox (XInput); kalau begitu pakai mode keyboard.",
-        "Keyboard: setir menekan tombol kiri/kanan, gas dan rem menekan tombol maju/mundur. Dengan mode halus, tombol ditekan berkedip cepat sehingga belokan kecil terasa pelan.",
+        "Gamepad: setir menjadi sumbu stik, gas dan rem sumbu terpisah. ESP32 tampil sebagai HID generik, bukan Xbox XInput; MSI App Player atau game tertentu mungkin tidak mendeteksinya. Untuk emulator, coba preset MSI App Player (keyboard WASD).",
+        "Keyboard: setir menekan tombol kiri/kanan, gas dan rem menekan tombol maju/mundur. Mode halus memakai pulsa cepat untuk mendekati analog; beberapa game lebih stabil dengan mode halus dimatikan.",
         "Mouse: setir menggerakkan kursor ke kiri/kanan, gas dan rem tetap lewat tombol keyboard maju/mundur.",
     ]
 

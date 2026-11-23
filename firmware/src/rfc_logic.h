@@ -101,7 +101,7 @@ struct Gesture {
     init = false; lvl = false; longOn = false; ignoreRel = false; clicks = 0;
     click = 0; longStart = longEnd = false;
   }
-  // type 0 = tombol momentary, 1 = pulsa bergantian tiap penekanan (edge)
+  // type 0 = tombol momentary, 1 = satu klik saat aktif, 2 = tiap perubahan level
   void update(uint32_t now, int pw, int thr, int type, int clickMs, int longMs, int hys = 40) {
     click = 0; longStart = longEnd = false;
     bool in = lvl ? (pw > thr - hys) : (pw > thr + hys);
@@ -112,8 +112,11 @@ struct Gesture {
       tLast = now - 1000;
       return;
     }
-    if (type == 1) {
-      if (in != lvl && now - tLast >= 40) { lvl = in; clicks++; tLast = now; }
+    if (type == 1 || type == 2) {
+      if (in != lvl && now - tLast >= 40) {
+        lvl = in;
+        if (type == 2 || in) { clicks++; tLast = now; }
+      }
       if (clicks && now - tLast >= (uint32_t)clickMs) { click = clicks > 3 ? 3 : clicks; clicks = 0; }
       return;
     }
@@ -384,8 +387,8 @@ class Engine {
     if (!cfg[PI_kb_pwm] || pct >= 95) return true;
     int period = cfg[PI_kb_period];
     int on = pct * period / 100;
-    if (on < 10) return false;
-    if (period - on < 10) return true;
+    if (on < 4) return false;
+    if (period - on < 4) return true;
     return (int)(tnow % (uint32_t)period) < on;
   }
   void kbSet(int i, bool want, int code) {

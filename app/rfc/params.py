@@ -106,7 +106,20 @@ PRESETS = {
     "Mobil, keyboard WASD": {"out_mode": 1, "gear_mode": 0, "rev_logic": 0, "kb_pwm": 1},
     "Mobil, keyboard + gigi otomatis": {"out_mode": 1, "gear_mode": 1, "rev_logic": 1, "kb_pwm": 1},
     "Gigi manual lewat CH3": {"out_mode": 1, "gear_mode": 2, "rev_logic": 1, "kb_pwm": 1},
-    "Gamepad balap": {"out_mode": 0, "gear_mode": 0, "rev_logic": 0},
+    "Gamepad balap": {
+        "out_mode": 0, "gear_mode": 0, "rev_logic": 0,
+        "c3_type": 1, "c4_type": 0,
+        "a_c3_1": make_act(AT_PAD, 1), "a_c3_2": make_act(AT_PAD, 2), "a_c3_3": make_act(AT_PAD, 4),
+        "a_c4_1": make_act(AT_PAD, 5), "a_c4_2": make_act(AT_PAD, 7),
+        "a_c4_3": make_act(AT_PAD, 8), "a_c4_l": make_act(AT_PAD, 12),
+        "a_gup": make_act(AT_PAD, 8), "a_gdn": make_act(AT_PAD, 7),
+        "a_gr": make_act(AT_PAD, 2), "a_gdrive": make_act(AT_PAD, 1),
+        "gk1": make_act(AT_PAD, 1), "gk2": make_act(AT_PAD, 2),
+        "gk3": make_act(AT_PAD, 3), "gk4": make_act(AT_PAD, 4),
+        "gk5": make_act(AT_PAD, 5), "gk6": make_act(AT_PAD, 6),
+    },
+    "MSI App Player (keyboard WASD)": {"out_mode": 1, "gear_mode": 0, "rev_logic": 0,
+                                      "kb_pwm": 1, "kb_period": 30, "kb_dz": 12},
 }
 
 

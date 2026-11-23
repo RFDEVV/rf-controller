@@ -57,10 +57,11 @@ Atau build sendiri: `cd firmware && pio run`.
 
 ## Fitur
 
-- **Output**: gamepad, keyboard (setir halus lewat kedip tombol), atau mouse.
+- **Output**: gamepad, keyboard (setir halus lewat kedip tombol), atau mouse. Filter noise, pita netral, zona mati, dan kurva respons bisa disetel per sumbu.
+- Preset **Gamepad balap** mengirim setir sebagai sumbu analog, gas/rem sebagai sumbu terpisah, dan gestur CH3/CH4 serta aksi gigi sebagai tombol HID gamepad (A/B/X/Y, LB/RB, Start), bukan keyboard.
 - **Deteksi pulsa**: monitor semua channel (sekarang, terendah, tertinggi, rata-rata, goyangan, status), wizard deteksi otomatis (rekam diam lalu gerak penuh, hitung tengah, rentang, pita netral, zona mati, ambang tombol), dan rentang kustom per channel: min/tengah/maks, pita netral (µs), penghalus, histeresis tombol, jendela pulsa sah, batas sinyal hilang.
 - **OLED** (SSD1306/SH1106, I2C): halaman status (gigi, mode, koneksi), bar, dan pulsa; otomatis bergantian atau dikunci; kecerahan, putar 180°, pin SDA/SCL. Aksi sistem "Ganti halaman OLED" bisa dipasang ke tombol remot.
-- **Tombol dan gestur**: CH3 (pulsa bergantian tiap tekan) dan CH4 (momentary) bisa diatur untuk klik 1x, 2x, 3x, dan tahan lama (CH4). Tiap gestur bisa menekan tombol keyboard, tombol gamepad, klik mouse, atau aksi sistem.
+- **Tombol dan gestur**: CH3 dan CH4 mendukung mode ditahan, satu klik per pulsa naik, atau toggle tiap perubahan level. Masing-masing bisa diatur untuk klik 1x, 2x, 3x; CH4 juga mendukung tahan lama. Tiap gestur bisa menekan tombol keyboard, tombol gamepad, klik mouse, atau aksi sistem.
 - **Aturan pulsa**: 6 aturan, aksi aktif selama pulsa channel berada di rentang tertentu.
 - **Gigi**: otomatis menurut persentase gas (ambang per gigi, histeresis, jeda), manual lewat CH3, mati; kunci gigi; tombol naik/turun atau tombol langsung per gigi.
 - **Rem dan mundur**: tuas didorong saat melaju = rem dulu; setelah netral dan didorong lagi = tombol gigi R ditekan lalu mundur.
@@ -83,8 +84,8 @@ Keterbatasan:
 
 ## Catatan kompatibilitas
 
-- Gamepad yang tampil adalah HID generik. Sebagian game PC hanya mengenali gamepad gaya Xbox (XInput). Kalau begitu pakai mode keyboard.
-- Game yang tidak mendukung stik analog bisa memakai mode keyboard halus.
+- Gamepad yang tampil adalah HID generik, bukan Xbox XInput. MSI App Player dan sebagian game hanya menerima controller XInput, sehingga bisa saja tidak menampilkan RF Controller. Untuk emulator, gunakan preset **MSI App Player (keyboard WASD)** di menu Profil dan petakan WASD di kontrol game emulator.
+- Mode keyboard halus memakai input digital berdenyut, bukan stik analog sungguhan. Atur periode untuk respons lebih cepat; jika game terasa tersendat atau tidak konsisten, matikan **Mode halus**. Gerak maju dan belok tetap dikirim sebagai tombol terpisah.
 
 ## Menjalankan aplikasi dari sumber
 
