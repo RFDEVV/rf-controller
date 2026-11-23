@@ -378,7 +378,6 @@ static void startOled() {
 // ------------------------------------------------------------ setup dan loop
 void setup() {
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
   prefs.begin("rfc", false);
   String s = prefs.getString("cfg", "");
   if (s.length() > 0) cfg.parse(s.c_str());
