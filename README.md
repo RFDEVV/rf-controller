@@ -59,7 +59,7 @@ Atau build sendiri: `cd firmware && pio run`. `platformio.ini` memakai pioarduin
 
 - **Output**: gamepad, keyboard, atau mouse. Pengiriman USB berjalan di task sendiri dan diulang bila gagal, jadi loop utama tidak tersendat. Di mode keyboard, setir halus memakai kedip merata (sigma-delta), gas dan rem ditahan terus.
 - **Deteksi pulsa**: monitor semua channel (sekarang, terendah, tertinggi, rata-rata, goyangan, status), wizard deteksi otomatis (rekam diam lalu gerak penuh, hitung tengah, rentang, pita netral, zona mati, ambang tombol), dan rentang kustom per channel: min/tengah/maks, pita netral (µs), penghalus, histeresis tombol, jendela pulsa sah, batas sinyal hilang.
-- **OLED** (SSD1306/SH1106, I2C): halaman status (gigi, mode, koneksi), bar, dan pulsa; otomatis bergantian atau dikunci; kecerahan, putar 180°, pin SDA/SCL. Aksi sistem "Ganti halaman OLED" bisa dipasang ke tombol remot.
+- **OLED** (SSD1306/SH1106, I2C): halaman status (gigi, mode, koneksi), bar, dan pulsa; otomatis bergantian atau dikunci; kecerahan, putar 180°, pin SDA/SCL. Timeout dan pemulihan bus otomatis membantu mencegah layar berhenti setelah gangguan I2C. Aksi sistem "Ganti halaman OLED" bisa dipasang ke tombol remot.
 - **Tombol dan gestur**: CH3 (pulsa bergantian tiap tekan) dan CH4 (momentary) bisa diatur untuk klik 1x, 2x, 3x, dan tahan lama (CH4). Tiap gestur bisa menekan tombol keyboard, tombol gamepad, klik mouse, atau aksi sistem.
 - **Aturan pulsa**: 6 aturan, aksi aktif selama pulsa channel berada di rentang tertentu.
 - **Gigi**, tiga mode selain mati:
@@ -71,7 +71,7 @@ Atau build sendiri: `cd firmware && pio run`. `platformio.ini` memakai pioarduin
 - **CH3 dan CH4**: polaritas pulsa dipelajari otomatis dari pulsa awal, jadi 975 ke 1965 maupun 1965 ke 975 sama-sama terbaca. Tiga jenis per channel: *Ditahan* (klik dihitung saat dilepas, ada tahan lama), *Klik per tekan*, dan *Bergantian* (setiap perubahan pulsa dihitung satu klik, cocok untuk tombol nyala-mati yang posisinya tidak tentu). Klik 1x, 2x, 3x bisa diatur untuk masing-masing.
 - **Diagnosa tombol**: halaman Tombol menampilkan gestur terakhir yang terbaca ESP32, dan tombol Tes di samping tiap aksi mengirim tombolnya ke PC tanpa remot.
 - **LED RGB board**: mati, status (merah/hijau/kuning/biru sesuai kondisi), warna, pelangi, napas; kecerahan, kecepatan, pilihan pin. Berjalan bersamaan dengan OLED.
-- **Koneksi**: kabel USB (utama), WiFi serumah (TCP 8266, `rfcontroller.local`), Bluetooth LE (Nordic UART).
+- **Koneksi**: kabel USB (utama), WiFi serumah (TCP 8266, `rfcontroller.local`), Bluetooth LE (Nordic UART). Pengiriman data monitor tidak menunggu buffer USB/TCP yang penuh agar loop kontrol tetap berjalan.
 - **Profil**: simpan per game, impor/ekspor, preset.
 - Failsafe: semua tombol dilepas jika sinyal remot hilang.
 

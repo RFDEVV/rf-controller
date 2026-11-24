@@ -14,6 +14,7 @@
 #include <USBHIDKeyboard.h>
 #include <USBHIDMouse.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <string>
 #include "esp_system.h"
 #include "soc/rtc_cntl_reg.h"
@@ -37,14 +38,25 @@
 static const uint8_t PINS[4] = {PIN_CH1, PIN_CH2, PIN_CH3, PIN_CH4};
 static volatile uint32_t gRise[4], gWidth[4], gStamp[4];
 static volatile uint32_t gPvMin = 400, gPvMax = 2800;  // jendela pulsa yang dianggap sah (diatur dari aplikasi)
+static portMUX_TYPE gPulseMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void IRAM_ATTR onEdge(int i) {
   uint32_t now = micros();
   if (digitalRead(PINS[i])) {
+    portENTER_CRITICAL_ISR(&gPulseMux);
     gRise[i] = now;
+    portEXIT_CRITICAL_ISR(&gPulseMux);
   } else {
-    uint32_t w = now - gRise[i];
-    if (w >= gPvMin && w <= gPvMax) { gWidth[i] = w; gStamp[i] = now; }
+    portENTER_CRITICAL_ISR(&gPulseMux);
+    uint32_t rise = gRise[i];
+    portEXIT_CRITICAL_ISR(&gPulseMux);
+    uint32_t w = now - rise;
+    if (w >= gPvMin && w <= gPvMax) {
+      portENTER_CRITICAL_ISR(&gPulseMux);
+      gWidth[i] = w;
+      gStamp[i] = now;
+      portEXIT_CRITICAL_ISR(&gPulseMux);
+    }
   }
 }
 static void IRAM_ATTR isr0() { onEdge(0); }
@@ -185,13 +197,24 @@ class Chan : public rfc::Host {
 
 class UsbChan : public Chan {
  public:
-  void write(const char* s) override { Serial.print(s); }
+  void write(const char* s) override {
+    size_t n = strlen(s);
+    // Drop telemetry under backpressure; configuration replies must remain complete.
+    if (s[0] == 'L' && s[1] == ' ' && Serial.availableForWrite() < (int)n) return;
+    Serial.write((const uint8_t*)s, n);
+  }
 } usbChan;
 
 class TcpChan : public Chan {
  public:
   WiFiClient cli;
-  void write(const char* s) override { if (cli.connected()) cli.print(s); }
+  void write(const char* s) override {
+    size_t n = strlen(s);
+    if (!cli.connected()) return;
+    // Drop telemetry under backpressure; configuration replies must remain complete.
+    if (s[0] == 'L' && s[1] == ' ' && cli.availableForWrite() < (int)n) return;
+    cli.write((const uint8_t*)s, n);
+  }
 } tcpChan;
 
 static BLECharacteristic* bleTx = nullptr;
@@ -373,9 +396,18 @@ static void oledPagePulse() {
   }
 }
 
+static void oledRecoverBus() {
+  oled->begin();
+  Wire.setTimeOut(20);
+  oled->setBusClock(400000);
+  oled->setContrast(cfg[rfc::PI_oled_contrast]);
+  oled->setFlipMode(cfg[rfc::PI_oled_rot]);
+}
+
 static void oledTask(void*) {
   uint32_t lastSwitch = 0, born = millis();
   int autoPage = 0, lastContrast = -1, lastRot = -1;
+  uint8_t busErrors = 0;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(100));
     uint32_t now = millis();
@@ -399,6 +431,13 @@ static void oledTask(void*) {
       else oledPagePulse();
     }
     oled->sendBuffer();
+    Wire.beginTransmission(0x3C);
+    if (Wire.endTransmission() == 0) {
+      busErrors = 0;
+    } else if (++busErrors >= 3) {
+      oledRecoverBus();
+      busErrors = 0;
+    }
   }
 }
 
@@ -406,6 +445,7 @@ static void startOled() {
   uint8_t sda = (uint8_t)cfg[rfc::PI_oled_sda], scl = (uint8_t)cfg[rfc::PI_oled_scl];
   if (cfg[rfc::PI_oled_type]) oled = new U8G2_SH1106_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE, scl, sda);
   else oled = new U8G2_SSD1306_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE, scl, sda);
+  Wire.setTimeOut(20);
   oled->begin();
   oled->setBusClock(400000);
   xTaskCreatePinnedToCore(oledTask, "oled", 6144, nullptr, 1, nullptr, 0);
@@ -452,8 +492,15 @@ void loop() {
   uint32_t limit = (uint32_t)cfg[rfc::PI_failsafe_ms] * 1000UL;
 
   uint16_t pw[4];
+  uint32_t widths[4], stamps[4];
+  portENTER_CRITICAL(&gPulseMux);
   for (int i = 0; i < 4; i++) {
-    uint32_t w = gWidth[i], age = nowUs - gStamp[i];
+    widths[i] = gWidth[i];
+    stamps[i] = gStamp[i];
+  }
+  portEXIT_CRITICAL(&gPulseMux);
+  for (int i = 0; i < 4; i++) {
+    uint32_t w = widths[i], age = nowUs - stamps[i];
     pw[i] = (w && age < limit) ? (uint16_t)w : 0;
   }
   bool sig = pw[0] && pw[1];
