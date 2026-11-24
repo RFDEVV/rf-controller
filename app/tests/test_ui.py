@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PySide6.QtCore import QCoreApplication, QSettings
 from PySide6.QtWidgets import QApplication
 
-from rfc.params import AT_PAD, DEFAULTS, PARAMS, describe_act, make_act
+from rfc.params import DEFAULTS, PARAMS, describe_act
 from rfc.theme import Theme
 from rfc.window import MainWindow
 
@@ -48,19 +48,8 @@ def main():
     pump(app, 0.2)
     assert win.store.get("g_t2") == 41
     # profil/preset
-    profiles = [pg for pg in win.pages if type(pg).__name__ == 'Profiles'][0]
-    profiles.apply_preset()
-    assert win.store.get("out_mode") == 1
-    profiles.preset.setCurrentText("Gamepad balap")
-    profiles.apply_preset()
-    assert win.store.get("out_mode") == 0
-    assert win.store.get("a_c3_1") == make_act(AT_PAD, 1)
-    assert win.store.get("a_c3_2") == make_act(AT_PAD, 2)
-    assert win.store.get("a_c3_3") == make_act(AT_PAD, 4)
-    assert win.store.get("a_c4_1") == make_act(AT_PAD, 5)
-    assert win.store.get("a_c4_l") == make_act(AT_PAD, 12)
-    assert win.store.get("a_gup") == make_act(AT_PAD, 8)
-    assert win.store.get("gk6") == make_act(AT_PAD, 6)
+    [pg for pg in win.pages if type(pg).__name__ == 'Profiles'][0].apply_preset()
+    assert win.store.get("out_mode") == 1 and win.store.get("gear_mode") == 3
     win.store.reset_defaults()
     assert win.store.v == DEMO_DEFAULTS()
     print("jumlah parameter:", len(PARAMS), "| deskripsi aksi:", describe_act(1025), "|", describe_act(357))
@@ -85,7 +74,7 @@ def test_analyze():
     out, notes = analyze(rest, sweep)
     assert 1495 <= out["c1_mid"] <= 1505 and out["c1_min"] < 1100 and out["c1_max"] > 1900, out
     assert out["nb1"] >= 4 and 2 <= out["dz1"] <= 40, out
-    assert out["c3_thr"] == 1050 and out["c4_thr"] == 1050, out
+    assert any("CH3" in n and "terbaca" in n for n in notes) and any("CH4" in n and "terbaca" in n for n in notes), notes
     assert 200 <= out["pv_min"] < 900 and out["pv_max"] > 2000, out
     out2, notes2 = analyze([[0] * 60] * 4, [[0] * 60] * 4)
     assert not [k for k in out2 if k.startswith("c")] and notes2

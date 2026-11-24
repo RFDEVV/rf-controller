@@ -3,8 +3,7 @@ import json
 import os
 import time
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget,
                                QComboBox)
@@ -12,6 +11,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QI
 from .flasher import Flasher
 from .link import Link
 from .params import DEFAULTS, PARAMS, PRESETS, resource_path
+from .remote_view import RemoteView
 from .widgets import (AnimBar, Card, CurveView, GearDial, Lamp, PAction, PKey, PSeg, PSlider, PSpin, PSwitch, Scope,
                       label, make_anim)
 from . import widgets as W
@@ -43,11 +43,22 @@ class Page(QScrollArea):
         body = QWidget()
         body.setObjectName("page")
         self.setWidget(body)
-        self.col = QVBoxLayout(body)
-        self.col.setContentsMargins(28, 8, 28, 28)
+        outer = QHBoxLayout(body)
+        outer.setContentsMargins(28, 8, 28, 28)
+        outer.addStretch(1)
+        inner = QWidget()
+        inner.setObjectName("page")
+        inner.setMaximumWidth(1180)
+        outer.addWidget(inner, 100)
+        outer.addStretch(1)
+        self.col = QVBoxLayout(inner)
+        self.col.setContentsMargins(0, 0, 0, 0)
         self.col.setSpacing(16)
 
     def feed_live(self, d):
+        pass
+
+    def on_gesture(self, ch, kind, act):
         pass
 
     def finish(self):
@@ -63,69 +74,6 @@ def row2(a, b, ratio=(1, 1)):
 
 
 # =============================================================== Dashboard
-class RemoteMap(QWidget):
-    def __init__(self, theme, parent=None):
-        super().__init__(parent)
-        self.theme = theme
-        self.pulses = [0, 0, 0, 0]
-        self.setMinimumHeight(138)
-        self.setToolTip("Peta fungsi channel remot")
-        theme.changed.connect(self.update)
-
-    def set_pulses(self, pulses):
-        self.pulses = pulses
-        self.update()
-
-    def paintEvent(self, _):
-        c = self.theme.c
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        mid = h / 2
-        body = QRectF(self.rect()).adjusted(w * 0.415, 20, -w * 0.415, -20)
-        p.setPen(QPen(QColor(c["border"]), 1.5))
-        p.setBrush(QColor(c["surface2"]))
-        p.drawRoundedRect(body, 18, 18)
-        wheel = body.center().x() - 13
-        p.setPen(QPen(QColor(c["accent"]), 3))
-        p.drawEllipse(QRectF(wheel - 16, mid - 16, 32, 32))
-        p.setPen(QPen(QColor(c["muted"]), 2))
-        p.drawLine(QPointF(wheel, mid - 13), QPointF(wheel, mid + 13))
-        p.drawLine(QPointF(wheel - 12, mid), QPointF(wheel + 12, mid))
-        p.setPen(QPen(QColor(c["amber"]), 4, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(QPointF(body.right() - 20, mid - 25), QPointF(body.right() - 20, mid + 3))
-        for i, key in enumerate(("teal", "rose")):
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c[key]))
-            p.drawEllipse(QPointF(body.right() - 20, mid + 20 + i * 13), 4, 4)
-
-        font = p.font()
-        font.setPixelSize(10)
-        p.setFont(font)
-        entries = [
-            (0, "CH1  Setir", c["accent"], 4, mid - 22, wheel - 18, mid - 5, Qt.AlignLeft),
-            (2, "CH3  Klik 1/2/3", c["teal"], 4, mid + 29, body.right() - 22, mid + 20, Qt.AlignLeft),
-            (1, "CH2  Gas / rem", c["amber"], w - 122, mid - 22, body.right() - 18, mid - 16, Qt.AlignRight),
-            (3, "CH4  Klik / tahan", c["rose"], w - 122, mid + 29, body.right() - 20, mid + 33, Qt.AlignRight),
-        ]
-        for idx, text, color, tx, ty, ex, ey, align in entries:
-            pulse = "—" if not self.pulses[idx] else "%d µs" % self.pulses[idx]
-            p.setPen(QColor(color))
-            p.drawText(QRectF(tx, ty - 12, 118, 15), align | Qt.AlignVCenter, text)
-            p.setPen(QColor(c["muted"]))
-            p.drawText(QRectF(tx, ty + 2, 118, 14), align | Qt.AlignVCenter, pulse)
-            start_x = tx + 118 if align == Qt.AlignLeft else tx
-            p.setPen(QPen(QColor(color), 1.4))
-            p.drawLine(QPointF(start_x, ty + 5), QPointF(ex, ey))
-            p.setBrush(QColor(color))
-            direction = 1 if ex > start_x else -1
-            arrow = QPainterPath(QPointF(ex, ey))
-            arrow.lineTo(ex - direction * 6, ey - 3)
-            arrow.lineTo(ex - direction * 6, ey + 3)
-            arrow.closeSubpath()
-            p.drawPath(arrow)
-
-
 class Dashboard(Page):
     title = "Dashboard"
     subtitle = "Pantau remot secara langsung"
@@ -133,11 +81,13 @@ class Dashboard(Page):
     def __init__(self, ctx):
         super().__init__(ctx)
         s = ctx.store
+        rc = Card()
+        self.remote = RemoteView(s)
+        rc.v.addWidget(self.remote)
+        self.col.addWidget(rc)
         left = Card()
         self.dial = W.GearDial()
         left.v.addWidget(self.dial, 1)
-        self.remote = RemoteMap(ctx.theme)
-        left.v.addWidget(self.remote)
         chips = QHBoxLayout()
         self.b_mode = QPushButton("Gigi: otomatis")
         self.b_lock = QPushButton("Kunci gigi")
@@ -185,7 +135,7 @@ class Dashboard(Page):
 
     def _refresh_btn(self):
         s = self.ctx.store
-        self.b_mode.setText("Gigi: " + ["mati", "otomatis", "manual"][s.get("gear_mode")])
+        self.b_mode.setText("Gigi: " + ["mati", "ambang gas", "manual", "lepas-gas"][s.get("gear_mode") % 4])
         self.b_out.setText("Output: " + ["gamepad", "keyboard", "mouse"][s.get("out_mode")])
         self.b_lock.setText("Gigi terkunci" if self._lock else "Kunci gigi")
         self.b_lock.setProperty("kind", "primary" if self._lock else "")
@@ -199,11 +149,14 @@ class Dashboard(Page):
         parts = ["<span style='color:%s'>●</span> %s <b>%d µs</b>" % (c[cols[i]], names[i], self.last_p[i]) for i in range(4)]
         self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(parts))
 
+    def on_gesture(self, ch, kind, act):
+        self.remote.on_gesture(ch, kind, act)
+
     def feed_live(self, d):
         s = self.ctx.store
+        self.remote.live = d
         self.scope.push(d["p"], d["sig"])
         self.last_p = d["p"]
-        self.remote.set_pulses(d["p"])
         gm = s.get("gear_mode")
         th = [s.get("g_t%d" % i) for i in range(1, s.get("g_max") + 1)] if gm == 1 else []
         self.dial.set_state(d["gas"], d["brk"], d["gear"], d["st"], bool(d["rev"]), bool(d["lock"]), th)
@@ -254,9 +207,7 @@ class ChannelCard(Card):
                 self.v.addWidget(PSpin(s, k, t, " µs"))
             self.v.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
         else:
-            self.v.addWidget(PSeg(s, "c%d_type" % n, [
-                ("Ditahan", 0), ("Pulsa sekali", 1), ("Toggle", 2),
-            ]))
+            self.v.addWidget(PSeg(s, "c%d_type" % n, [("Ditahan (momentary)", 0), ("Bergantian tiap tekan", 1)]))
             self.v.addWidget(PSpin(s, "c%d_thr" % n, "Ambang tinggi/rendah", " µs"))
             row = QHBoxLayout()
             self.low, self.high = None, None
@@ -339,7 +290,7 @@ class Calibration(Page):
 # =============================================================== Setir & Gas
 class SteerThrottle(Page):
     title = "Setir dan gas"
-    subtitle = "Zona mati, peredam noise, kurva respons, dan logika rem/mundur"
+    subtitle = "Zona mati, kurva respons, dan logika rem/mundur"
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -351,11 +302,10 @@ class SteerThrottle(Page):
             cv.setFixedWidth(210)
             self.curves.append(cv)
             f = QVBoxLayout()
-            f.addWidget(PSwitch(s, "inv%d" % n, "Balik arah gas / rem" if n == 2 else "Balik arah setir"))
+            f.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
             f.addWidget(PSlider(s, "dz%d" % n, "Zona mati", "%"))
             f.addWidget(PSlider(s, "ex%d" % n, "Kurva halus (ekspo)", "%"))
-            f.addWidget(PSlider(s, "flt%d" % n, "Peredam noise", "%"))
-            f.addWidget(PSlider(s, "nb%d" % n, "Pita netral anti-noise", "µs"))
+            f.addWidget(PSlider(s, "flt%d" % n, "Peredam noise", ""))
             f.addWidget(PSlider(s, lim, "Batas maksimum", "%"))
             h = QHBoxLayout()
             h.setSpacing(18)
@@ -369,33 +319,61 @@ class SteerThrottle(Page):
         rv.v.addWidget(PSlider(s, "brk_th", "Ambang mulai rem/mundur", "%"))
         rv.v.addWidget(PSlider(s, "nz", "Lebar zona netral", "%"))
         rv.v.addWidget(PSlider(s, "settle_ms", "Waktu tuas harus netral", "ms"))
+        rv.v.addWidget(PSlider(s, "fwd_auto_ms", "Dari R: rem lalu maju", "ms"))
+        rv.v.addWidget(label("Saat sedang mundur lalu trigger ditarik, mobil mengerem sebentar lalu otomatis maju. Isi 0 untuk wajib netral dulu.", "muted", True))
+        rv.v.addWidget(PSlider(s, "rev_auto_ms", "Dari maju: rem lalu R", "ms"))
+        rv.v.addWidget(label("0 = rem dulu, lalu harus netral sebelum mundur. Isi angka kalau mau langsung mundur setelah rem ditahan.", "muted", True))
         self.col.addWidget(rv)
+        ck = Card("Cek arah (tarik trigger, putar setir)")
+        self.dir_txt = label("Tarik trigger: harus muncul GAS. Putar setir ke kanan: harus muncul KANAN.", "muted", True)
+        self.dir_big = QLabel("—")
+        self.dir_big.setProperty("role", "title")
+        ck.v.addWidget(self.dir_big)
+        ck.v.addWidget(self.dir_txt)
+        ck.v.addWidget(label("Kalau terbalik, nyalakan Balik arah di kartu yang sesuai, atau pakai Deteksi pulsa yang menentukan arah otomatis.", "muted", True))
+        self.col.addWidget(ck)
         self.finish()
 
     def feed_live(self, d):
         self.curves[0].set_pulse(d["p"][0])
         self.curves[1].set_pulse(d["p"][1])
+        st, th = d["steer"], d["thr"]
+        a = "KANAN %d%%" % st if st > 4 else ("KIRI %d%%" % -st if st < -4 else "setir tengah")
+        b = "GAS %d%%" % th if th > 4 else ("REM %d%%" % -th if th < -4 else "trigger netral")
+        self.dir_big.setText("%s    ·    %s" % (a, b))
 
 
 # =============================================================== Gigi
 class Gears(Page):
     title = "Gigi"
-    subtitle = "Otomatis menurut gas, atau manual lewat CH3"
+    subtitle = "Lepas-gas, ambang gas, atau manual, plus urutan ke R"
 
     def __init__(self, ctx):
         super().__init__(ctx)
         s = ctx.store
         mode = Card("Mode gigi")
-        mode.v.addWidget(PSeg(s, "gear_mode", [("Mati", 0), ("Otomatis", 1), ("Manual", 2)]))
-        mode.v.addWidget(label("Otomatis: gigi naik dan turun mengikuti persentase gas. Manual: gigi hanya berubah lewat aksi Naik/Turun gigi di menu Tombol. Mati: tidak ada tombol gigi yang ditekan.", "muted", True))
+        mode.v.addWidget(PSeg(s, "gear_mode", [("Mati", 0), ("Ambang gas", 1), ("Manual", 2), ("Lepas-gas", 3)]))
+        mode.v.addWidget(label("Lepas-gas: gas ditahan, dilepas ke netral, lalu digas lagi = naik satu gigi. Ambang gas: gigi naik dan turun mengikuti persentase gas. Manual: lewat aksi Naik/Turun gigi di menu Tombol. Mati: tidak ada tombol gigi yang ditekan.", "muted", True))
         self.col.addWidget(mode)
 
-        th = Card("Ambang gas per gigi")
+        pm = Card("Mode lepas-gas")
+        pm.v.addWidget(PSlider(s, "pump_hold_ms", "Gas harus ditahan minimal", "ms"))
+        pm.v.addWidget(PSlider(s, "pump_rel_ms", "Dilepas ke netral minimal", "ms"))
+        pm.v.addWidget(PSlider(s, "pump_win_ms", "Gas lagi dalam waktu maksimal", "ms"))
+        pm.v.addWidget(PSlider(s, "g_max", "Gigi tertinggi", ""))
+        pm.v.addWidget(label("Contoh: tarik trigger dan tahan sebentar, lepas ke netral, tarik lagi: gigi naik. Saat gigi masih R atau netral, tarik trigger maju otomatis naik ke gigi 1.", "muted", True))
+        self.col.addWidget(pm)
+        rr = Card("Pindah ke gigi R (mundur)")
+        rr.v.addWidget(PSwitch(s, "r_seq", "Turun gigi berkali-kali sampai R", "Tombol Turun gigi ditekan sebanyak gigi sekarang (gigi 5 = 5 klik). Matikan kalau game punya tombol R sendiri."))
+        rr.v.addWidget(PSlider(s, "seq_delay_ms", "Jeda antar klik turun gigi", "ms"))
+        rr.v.addWidget(PSlider(s, "rev_auto_ms", "Rem ditahan, lalu ke R", "ms"))
+        rr.v.addWidget(label("Urutan: dorong trigger saat melaju = rem. Setelah netral lalu didorong lagi, atau rem ditahan selama waktu di atas, ESP32 menekan Turun gigi sampai R lalu mobil mundur.", "muted", True))
+        self.col.addWidget(rr)
+        th = Card("Ambang gas per gigi (mode Ambang gas)")
         self.bar = AnimBar("Gas sekarang", 0, 100, color="amber")
         th.v.addWidget(self.bar)
         for i in range(1, 7):
             th.v.addWidget(PSlider(s, "g_t%d" % i, "Gigi %d aktif di gas ≥" % i, "%"))
-        th.v.addWidget(PSlider(s, "g_max", "Gigi tertinggi", ""))
         th.v.addWidget(PSlider(s, "g_hyst", "Histeresis turun", "%"))
         th.v.addWidget(PSlider(s, "g_dwell", "Jeda minimal antar pindah gigi", "ms"))
         self.col.addWidget(th)
@@ -430,20 +408,27 @@ class Buttons(Page):
     def __init__(self, ctx):
         super().__init__(ctx)
         s = ctx.store
-        c3 = Card("CH3  (tombol / pulsa)")
+        self.banner = Card()
+        self.last = QLabel("Tekan CH3 atau CH4 di remot. Gestur terakhir yang terbaca muncul di sini.")
+        self.last.setProperty("role", "h2")
+        self.banner.v.addWidget(self.last)
+        self.banner.v.addWidget(label("Kalau gestur terbaca tapi tombol tidak muncul di PC, tekan Tes di samping aksi. Tes mengirim tombol dari ESP32 ke PC tanpa remot.", "muted", True))
+        self.col.addWidget(self.banner)
+        c3 = Card("CH3  (klik nyala, klik lagi mati)")
+        c3.v.addWidget(PSeg(s, "c3_type", [("Ditahan", 0), ("Klik per tekan", 1), ("Bergantian", 2)]))
         c3.v.addWidget(PAction(s, "a_c3_1", "Klik 1x"))
         c3.v.addWidget(PAction(s, "a_c3_2", "Klik 2x"))
         c3.v.addWidget(PAction(s, "a_c3_3", "Klik 3x"))
-        c3.v.addWidget(label("Pilih mode pulsa untuk hitung satu klik saat sinyal naik, atau mode toggle jika remot mengubah level tiap tekanan. Jenis dan ambang di menu Deteksi pulsa.", "muted", True))
+        c3.v.addWidget(label("Bergantian: setiap perubahan pulsa dihitung satu klik, jadi posisi nyala atau mati tidak masalah. Polaritas (naik atau turun) dipelajari otomatis dari pulsa awal.", "muted", True))
         self.col.addWidget(c3)
-        c4 = Card("CH4  (tombol / pulsa)")
+        c4 = Card("CH4  (klik dan tahan)")
+        c4.v.addWidget(PSeg(s, "c4_type", [("Ditahan", 0), ("Klik per tekan", 1), ("Bergantian", 2)]))
         c4.v.addWidget(PAction(s, "a_c4_1", "Klik 1x"))
         c4.v.addWidget(PAction(s, "a_c4_2", "Klik 2x"))
         c4.v.addWidget(PAction(s, "a_c4_3", "Klik 3x"))
         c4.v.addWidget(PAction(s, "a_c4_l", "Tahan lama"))
-        c4.v.addWidget(label("Mode momentary membaca klik dan tahan. Mode pulsa membaca satu klik tiap pulsa naik; mode toggle membaca setiap perubahan level.", "muted", True))
-        c4.v.addWidget(label("Preset Gamepad balap memetakan CH3/CH4 ke tombol gamepad A/B/X/Y, LB/RB, dan Start. Pemetaan ini tidak mengirim tombol keyboard.", "muted", True))
         self.col.addWidget(c4)
+        self._kinds = {1: "klik 1x", 2: "klik 2x", 3: "klik 3x", 9: "tahan lama", 0: "tes"}
         tm = Card("Waktu gestur")
         tm.v.addWidget(PSlider(s, "click_ms", "Jeda antar klik", "ms"))
         tm.v.addWidget(PSlider(s, "long_ms", "Dianggap tahan lama setelah", "ms"))
@@ -472,14 +457,20 @@ class Buttons(Page):
         self.finish()
 
 
+    def on_gesture(self, ch, kind, act):
+        from .params import describe_act
+        who = "Tes" if ch == 0 else "CH%d" % ch
+        self.last.setText("Terbaca: %s %s  →  %s" % (who, self._kinds.get(kind, "?"), describe_act(act)))
+
+
 # =============================================================== Output
 class Output(Page):
     title = "Output"
     subtitle = "Pilih cara ESP32 tampil di PC"
 
     DESC = [
-        "Gamepad: setir menjadi sumbu stik, gas dan rem sumbu terpisah. ESP32 tampil sebagai HID generik, bukan Xbox XInput; MSI App Player atau game tertentu mungkin tidak mendeteksinya. Untuk emulator, coba preset MSI App Player (keyboard WASD).",
-        "Keyboard: setir menekan tombol kiri/kanan, gas dan rem menekan tombol maju/mundur. Mode halus memakai pulsa cepat untuk mendekati analog; beberapa game lebih stabil dengan mode halus dimatikan.",
+        "Gamepad: setir jadi stik kiri, gas jadi pedal kanan, rem jadi pedal kiri. Dikenali sebagai gamepad HID generik. Sebagian game hanya mengenali gamepad gaya Xbox (XInput); kalau begitu pakai mode keyboard.",
+        "Keyboard: setir menekan tombol kiri/kanan, gas dan rem menekan tombol maju/mundur. Dengan mode halus, tombol ditekan berkedip cepat sehingga belokan kecil terasa pelan.",
         "Mouse: setir menggerakkan kursor ke kiri/kanan, gas dan rem tetap lewat tombol keyboard maju/mundur.",
     ]
 
@@ -494,8 +485,9 @@ class Output(Page):
         k = Card("Tombol keyboard untuk setir, gas, dan rem")
         for key, t in (("k_left", "Setir kiri"), ("k_right", "Setir kanan"), ("k_fwd", "Gas / maju"), ("k_back", "Rem / mundur")):
             k.v.addWidget(PKey(s, key, t))
-        k.v.addWidget(PSwitch(s, "kb_pwm", "Mode halus (berkedip)", "Tombol ditekan-lepas cepat sesuai besar putaran, meniru analog."))
-        k.v.addWidget(PSlider(s, "kb_period", "Periode kedip", "ms"))
+        k.v.addWidget(PSwitch(s, "kb_pwm", "Setir halus (kedip merata)", "Belok kecil = tombol A/D ditekan sebagian waktu. Matikan kalau game terasa bergetar."))
+        k.v.addWidget(PSwitch(s, "kb_pwm_gas", "Gas dan rem juga berkedip", "Biasanya dimatikan: W/S ditahan terus selama trigger ditarik, jadi mobil tidak tersendat."))
+        k.v.addWidget(PSlider(s, "kb_slot", "Lebar slot kedip", "ms"))
         k.v.addWidget(PSlider(s, "kb_dz", "Ambang mulai menekan", "%"))
         self.col.addWidget(k)
         m = Card("Mouse")
@@ -630,7 +622,7 @@ class Profiles(Page):
 # =============================================================== Firmware
 class Firmware(Page):
     title = "Firmware"
-    subtitle = "Pasang firmware RF Controller ke ESP32-S3"
+    subtitle = "Pasang firmware RF CONTROL ke ESP32-S3"
 
     def __init__(self, ctx):
         super().__init__(ctx)

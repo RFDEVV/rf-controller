@@ -18,7 +18,7 @@
 #include "esp_system.h"
 #include "soc/rtc_cntl_reg.h"
 
-#define RFC_FW_VERSION "1.2.0"
+#define RFC_FW_VERSION "1.4.0"
 #include "rfc_logic.h"
 
 #ifndef PIN_CH1
@@ -58,47 +58,83 @@ USBHIDMouse Mouse;
 USBHIDGamepad Gamepad;
 Preferences prefs;
 
+// Mesin logika hanya menulis KEADAAN YANG DIINGINKAN. Task HID terpisah yang mengirim laporan USB,
+// karena SendReport() memblokir sampai host membaca laporan. Dengan begitu loop utama tidak tersendat.
 class HidSink : public rfc::Sink {
  public:
-  void press(int a) override {
-    int t = rfc::actType(a), c = rfc::actCode(a);
-    if (t == rfc::AT_KEY) Keyboard.press((uint8_t)c);
-    else if (t == rfc::AT_PAD) { if (c >= 1 && c <= 32) { btn |= (1UL << (c - 1)); dirty = true; } }
-    else if (t == rfc::AT_MOUSE) Mouse.press(c == 1 ? MOUSE_LEFT : c == 2 ? MOUSE_RIGHT : MOUSE_MIDDLE);
-  }
-  void release(int a) override {
-    int t = rfc::actType(a), c = rfc::actCode(a);
-    if (t == rfc::AT_KEY) Keyboard.release((uint8_t)c);
-    else if (t == rfc::AT_PAD) { if (c >= 1 && c <= 32) { btn &= ~(1UL << (c - 1)); dirty = true; } }
-    else if (t == rfc::AT_MOUSE) Mouse.release(c == 1 ? MOUSE_LEFT : c == 2 ? MOUSE_RIGHT : MOUSE_MIDDLE);
-  }
+  volatile uint8_t want[256];
+  volatile uint8_t have[256];
+  volatile uint32_t pad = 0;
+  volatile uint8_t mouseWant = 0;
+  volatile int mouseAcc = 0;
+  volatile int8_t ax = 0, arx = -127, ary = -127;
+
+  HidSink() { memset((void*)want, 0, sizeof(want)); memset((void*)have, 0, sizeof(have)); }
+
+  void press(int a) override { apply(a, true); }
+  void release(int a) override { apply(a, false); }
   void axes(int steer, int gas, int brake) override {
-    int8_t x = (int8_t)(steer * 127 / 100);
-    int8_t rx = (int8_t)(-127 + brake * 254 / 100);  // pedal kiri: rem
-    int8_t ry = (int8_t)(-127 + gas * 254 / 100);    // pedal kanan: gas
-    if (x != ax || rx != arx || ry != ary) { ax = x; arx = rx; ary = ry; dirty = true; }
+    upd(ax, (int8_t)(steer * 127 / 100));
+    upd(arx, (int8_t)(-127 + brake * 254 / 100));  // pedal kiri: rem
+    upd(ary, (int8_t)(-127 + gas * 254 / 100));    // pedal kanan: gas
   }
-  void mouse(int dx) override {
-    while (dx > 127) { Mouse.move(127, 0); dx -= 127; }
-    while (dx < -127) { Mouse.move(-127, 0); dx += 127; }
-    if (dx) Mouse.move((int8_t)dx, 0);
-  }
-  void flush() {
-    uint32_t now = millis();
-    if (dirty && now - lastSend >= 4) {
-      Gamepad.send(ax, 0, 0, 0, arx, ary, 0, btn);
-      dirty = false; lastSend = now;
-    }
-  }
+  void mouse(int dx) override { __atomic_fetch_add(&mouseAcc, dx, __ATOMIC_RELAXED); }
+
  private:
-  uint32_t btn = 0, lastSend = 0;
-  int8_t ax = 0, arx = -127, ary = -127;
-  bool dirty = true;
+  static void upd(volatile int8_t& cur, int8_t v) {
+    if (v == cur) return;
+    if (abs(v - cur) >= 2 || v == 0 || v >= 127 || v <= -127) cur = v;  // abaikan goyangan 1 langkah
+  }
+  void apply(int a, bool down) {
+    int t = rfc::actType(a), c = rfc::actCode(a);
+    if (t == rfc::AT_KEY) want[c] = down ? 1 : 0;
+    else if (t == rfc::AT_PAD && c >= 1 && c <= 32) { if (down) pad |= (1UL << (c - 1)); else pad &= ~(1UL << (c - 1)); }
+    else if (t == rfc::AT_MOUSE && c >= 1 && c <= 3) { uint8_t bit = (uint8_t)(1 << (c - 1)); if (down) mouseWant |= bit; else mouseWant &= (uint8_t)~bit; }
+  }
 };
 
 static rfc::Config cfg;
 static HidSink sink;
 static rfc::Engine engine(cfg, sink);
+
+static void hidTask(void*) {
+  uint32_t lastPad = 0, sentPad = 0;
+  int8_t sx = 0, srx = -127, sry = -127;
+  uint8_t mHave = 0;
+  bool first = true;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(2));
+    for (int k = 1; k < 256; k++) {
+      uint8_t w = sink.want[k];
+      if (w != sink.have[k]) {
+        if (w) Keyboard.press((uint8_t)k); else Keyboard.release((uint8_t)k);
+        sink.have[k] = w;
+      }
+    }
+    uint8_t mw = sink.mouseWant;
+    if (mw != mHave) {
+      for (int b = 0; b < 3; b++) {
+        uint8_t bit = (uint8_t)(1 << b), code = b == 0 ? MOUSE_LEFT : b == 1 ? MOUSE_RIGHT : MOUSE_MIDDLE;
+        if ((mw & bit) && !(mHave & bit)) Mouse.press(code);
+        if (!(mw & bit) && (mHave & bit)) Mouse.release(code);
+      }
+      mHave = mw;
+    }
+    int dx = __atomic_exchange_n(&sink.mouseAcc, 0, __ATOMIC_RELAXED);
+    while (dx > 127) { Mouse.move(127, 0); dx -= 127; }
+    while (dx < -127) { Mouse.move(-127, 0); dx += 127; }
+    if (dx) Mouse.move((int8_t)dx, 0);
+    uint32_t now = millis();
+    uint32_t pb = sink.pad;
+    int8_t x = sink.ax, rx = sink.arx, ry = sink.ary;
+    if ((first || pb != sentPad || x != sx || rx != srx || ry != sry) && now - lastPad >= 8) {
+      if (Gamepad.send(x, 0, 0, 0, rx, ry, 0, pb)) {   // kalau gagal, dicoba lagi di putaran berikutnya
+        sentPad = pb; sx = x; srx = rx; sry = ry; first = false;
+      }
+      lastPad = now;
+    }
+  }
+}
 
 // ------------------------------------------------------------ jaringan
 static String gSsid, gPass;
@@ -193,7 +229,7 @@ class BleRxCb : public BLECharacteristicCallbacks {
 };
 
 static void startBle() {
-  BLEDevice::init("RF Controller");
+  BLEDevice::init("RF CONTROL");
   BLEServer* srv = BLEDevice::createServer();
   srv->setCallbacks(new BleServerCb());
   BLEService* svc = srv->createService(NUS_SERVICE);
@@ -302,8 +338,8 @@ static void oledPageStatus(uint32_t now) {
   const char* g = engine.rev ? "R" : GN[engine.gear < 0 ? 0 : (engine.gear > 6 ? 6 : engine.gear)];
   oled->drawStr(6, 54, g);
   oled->setFont(u8g2_font_6x10_tf);
-  const char* stn[] = {"NETRAL", "MAJU", "REM", "MUNDUR", "REM"};
-  oled->drawStr(52, 25, stn[engine.st % 5]);
+  const char* stn[] = {"NETRAL", "MAJU", "REM", "MUNDUR", "REM", "KE R"};
+  oled->drawStr(52, 25, stn[engine.st % 6]);
   oled->drawStr(52, 38, "GAS");
   oledBar(76, 30, 50, 9, engine.gas, false);
   oled->drawStr(52, 51, "REM");
@@ -349,7 +385,7 @@ static void oledTask(void*) {
     oled->clearBuffer();
     if (now - born < 1500) {
       oled->setFont(u8g2_font_helvB10_tf);
-      oled->drawStr(14, 30, "RF Controller");
+      oled->drawStr(24, 30, "RF CONTROL");
       oled->setFont(u8g2_font_6x10_tf);
       oled->drawStr(34, 46, "v" RFC_FW_VERSION);
     } else {
@@ -378,6 +414,7 @@ static void startOled() {
 // ------------------------------------------------------------ setup dan loop
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   prefs.begin("rfc", false);
   String s = prefs.getString("cfg", "");
   if (s.length() > 0) cfg.parse(s.c_str());
@@ -391,12 +428,13 @@ void setup() {
   attachInterrupt(PINS[2], isr2, CHANGE);
   attachInterrupt(PINS[3], isr3, CHANGE);
 
-  USB.productName("RF Controller");
-  USB.manufacturerName("RF Builder");
+  USB.productName("RF CONTROL");
+  USB.manufacturerName("RF CONTROL");
   Keyboard.begin();
   Mouse.begin();
   Gamepad.begin();
   USB.begin();
+  xTaskCreatePinnedToCore(hidTask, "hid", 4096, nullptr, 3, nullptr, 1);
 
   if (cfg[rfc::PI_oled_en]) startOled();
   if (cfg[rfc::PI_ble_en]) startBle();
@@ -425,8 +463,16 @@ void loop() {
   gPvMax = (uint32_t)cfg[rfc::PI_pv_max];
 
   engine.update(nowMs, pw, sig);
-  sink.flush();
   serviceLed(nowMs, sig);
+  static unsigned lastEv = 0;
+  if (engine.evSeq != lastEv) {
+    lastEv = engine.evSeq;
+    char eb[40];
+    engine.eventLine(eb, sizeof(eb));
+    if (usbChan.live) usbChan.write(eb);
+    if (tcpChan.live) tcpChan.write(eb);
+    if (bleChan.live) bleChan.write(eb);
+  }
 
   while (Serial.available()) usbChan.feed((char)Serial.read());
   serviceWifi();

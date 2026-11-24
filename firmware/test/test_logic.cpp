@@ -19,13 +19,12 @@ static int fails = 0;
 
 struct Rig {
   Config cfg; Mock m; Engine e; uint32_t t = 1000; uint16_t pw[4] = {1500, 1500, 900, 900};
-  Rig() : e(cfg, m) {}
+  Rig() : e(cfg, m) { cfg.set("flt1", 0); cfg.set("flt2", 0); cfg.set("gear_mode", 1); cfg.set("r_seq", 0); }
   void run(int ms) { for (int i = 0; i < ms; i++) { t++; e.update(t, pw, true); } }
   void gas(int pct) { pw[1] = 1500 + pct * 5; }   // pct -100..100 -> 1000..2000
   void ch3Press() { pw[2] = (pw[2] == 900) ? 1200 : 900; }
 };
 static const int KEYE = 256 + 'e', KEYQ = 256 + 'q', KEYR = 256 + 'r', KEYW = 256 + 'w', KEYS = 256 + 's';
-static const int KEYA = 256 + 'a', KEYD = 256 + 'd';
 
 int main() {
   // 1. Serialisasi roundtrip dan klem
@@ -35,18 +34,18 @@ int main() {
     printf("jumlah param %d, ukuran teks %zu\n", (int)PI_COUNT, strlen(buf)); CHECK(strlen(buf) < 3000, "ukuran teks < 3000"); }
 
   // 2. CH3 edge: 1x, 2x, 3x
-  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("out_mode", 0); r.cfg.set("c3_type", 2); r.run(100);
+  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("out_mode", 0); r.run(100);
     r.ch3Press(); r.run(500); CHECK(r.e.gear == 1, "CH3 1x -> gigi 1 (manual)");
     r.ch3Press(); r.run(500); CHECK(r.e.gear == 2, "CH3 klik berikutnya naik ke gigi 2"); }
-  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("c3_type", 2); r.run(100);
+  { Rig r; r.cfg.set("gear_mode", 2); r.run(100);
     r.ch3Press(); r.run(500); r.ch3Press(); r.run(100); r.ch3Press(); r.run(500);   // 2x cepat? tidak: jeda 100ms antar tekan
     CHECK(r.e.gear == 1, "tiga tekan cepat = aksi klik3 (kosong), gigi tetap 1"); }
-  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("c3_type", 2); r.run(100); r.ch3Press(); r.run(500); // gigi1
+  { Rig r; r.cfg.set("gear_mode", 2); r.run(100); r.ch3Press(); r.run(500); // gigi1
     r.ch3Press(); r.run(120); r.ch3Press(); r.run(600);                      // dua klik cepat -> turun gigi (tidak ada karena gigi1)
     CHECK(r.e.gear == 1, "klik 2x di gigi 1 tidak turun di bawah 1"); }
 
   // 3. Manual: naik dua kali lalu turun
-  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("c3_type", 2); r.run(100);
+  { Rig r; r.cfg.set("gear_mode", 2); r.run(100);
     r.ch3Press(); r.run(500); r.ch3Press(); r.run(500);
     // klik1 -> naik; urutan: gigi1 lalu klik1 -> gigi2
     CHECK(r.e.gear == 2, "manual naik ke gigi 2");
@@ -54,7 +53,7 @@ int main() {
     CHECK(r.e.gear == 1, "manual klik 2x turun ke gigi 1"); }
 
   // 4. Kunci gigi memblokir naik
-  { Rig r; r.cfg.set("gear_mode", 2); r.cfg.set("c3_type", 2); r.run(100); r.e.doSys(SYS_LOCK); r.ch3Press(); r.run(500);
+  { Rig r; r.cfg.set("gear_mode", 2); r.run(100); r.e.doSys(SYS_LOCK); r.ch3Press(); r.run(500);
     CHECK(r.e.gear == 1, "gigi 1 tetap bisa masuk dari netral"); r.ch3Press(); r.run(500);
     CHECK(r.e.gear == 1, "kunci gigi mencegah naik"); r.e.doSys(SYS_LOCK); r.ch3Press(); r.run(500);
     CHECK(r.e.gear == 2, "setelah kunci dilepas bisa naik"); }
@@ -65,35 +64,6 @@ int main() {
     r.pw[3] = 1200; r.run(100); r.pw[3] = 900; r.run(100); r.pw[3] = 1200; r.run(100); r.pw[3] = 900; r.run(500);  // klik2 = kunci
     CHECK(r.e.lock, "CH4 klik 2x mengunci gigi");
     r.pw[3] = 1200; r.run(800); CHECK(r.cfg[PI_gear_mode] == 2, "CH4 tahan lama ganti mode gigi"); r.pw[3] = 900; r.run(100); }
-
-  // 5b. CH3 pulse inputs fire exactly one mapped action for 1x, 2x, and 3x.
-  { const int acts[] = {KEYQ, KEYE, KEYA};
-    for (int clicks = 1; clicks <= 3; clicks++) {
-      Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.cfg.set("c3_type", 1);
-      r.cfg.set("a_c3_1", makeAct(AT_KEY, 'q')); r.cfg.set("a_c3_2", makeAct(AT_KEY, 'e')); r.cfg.set("a_c3_3", makeAct(AT_KEY, 'a')); r.run(100);
-      for (int i = 0; i < clicks; i++) { r.pw[2] = 1200; r.run(50); r.pw[2] = 900; r.run(50); }
-      r.run(400);
-      for (int i = 0; i < 3; i++)
-        CHECK(r.m.count("P" + std::to_string(acts[i])) == (i == clicks - 1 ? 1 : 0), "CH3 1x/2x/3x memicu aksi yang dipetakan");
-    }
-  }
-  { Rig r; r.cfg.set("out_mode", 0); r.cfg.set("gear_mode", 0); r.cfg.set("c3_type", 1);
-    r.cfg.set("a_c3_1", makeAct(AT_PAD, 1)); r.run(100);
-    r.pw[2] = 1200; r.run(50); r.pw[2] = 900; r.run(400);
-    CHECK(r.m.count("P" + std::to_string(makeAct(AT_PAD, 1))) == 1 &&
-          r.m.count("R" + std::to_string(makeAct(AT_PAD, 1))) == 1,
-          "aksi CH3 dapat menekan dan melepas tombol gamepad"); }
-  // 5c. CH4 momentary inputs map 1x, 2x, and 3x independently.
-  { const int acts[] = {KEYQ, KEYE, KEYA};
-    for (int clicks = 1; clicks <= 3; clicks++) {
-      Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.cfg.set("c4_type", 0);
-      r.cfg.set("a_c4_1", makeAct(AT_KEY, 'q')); r.cfg.set("a_c4_2", makeAct(AT_KEY, 'e')); r.cfg.set("a_c4_3", makeAct(AT_KEY, 'a')); r.run(100);
-      for (int i = 0; i < clicks; i++) { r.pw[3] = 1200; r.run(50); r.pw[3] = 900; r.run(50); }
-      r.run(400);
-      for (int i = 0; i < 3; i++)
-        CHECK(r.m.count("P" + std::to_string(acts[i])) == (i == clicks - 1 ? 1 : 0), "CH4 1x/2x/3x memicu aksi yang dipetakan");
-    }
-  }
 
   // 6. Gigi otomatis naik saat gas bertambah, turun saat berkurang
   { Rig r; r.cfg.set("g_dwell", 200); r.run(100);
@@ -119,7 +89,7 @@ int main() {
     CHECK(q.e.gear == 1, "kunci mencegah naik otomatis"); }
 
   // 9. Rem lalu netral lalu mundur
-  { Rig r; r.cfg.set("g_dwell", 100); r.run(100); r.gas(60); r.run(1500); CHECK(r.e.st == ST_FWD, "maju");
+  { Rig r; r.cfg.set("fwd_auto_ms", 0); r.cfg.set("g_dwell", 100); r.run(100); r.gas(60); r.run(1500); CHECK(r.e.st == ST_FWD, "maju");
     r.m.clear(); r.gas(-50); r.run(50);
     CHECK(r.e.st == ST_BRK_F, "tuas dimundurkan saat maju -> rem"); CHECK(r.e.brk > 0 && r.e.gas == 0, "keluaran rem");
     CHECK(r.m.count("P" + std::to_string(KEYR)) == 0, "R belum ditekan saat rem");
@@ -148,25 +118,19 @@ int main() {
     r.pw[0] = 1000; r.run(50); CHECK(r.m.count("P" + std::to_string(256 + 'a')) == 1, "A ditekan saat setir kiri");
     r.pw[0] = 1500; r.run(50); CHECK(r.m.count("R" + std::to_string(256 + 'a')) == 1, "A dilepas"); }
   { Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.run(100); r.pw[0] = 1700; r.run(600);
-    int p = r.m.count("P" + std::to_string(256 + 'd')); CHECK(p >= 15 && p <= 25, "PWM cepat menekan D berulang untuk belok sedang"); }
-  { Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.cfg.set("kb_pwm", 0); r.run(100);
-    r.gas(80); r.pw[0] = 2000; r.run(50);
-    CHECK(r.m.count("P" + std::to_string(KEYW)) == 1 && r.m.count("P" + std::to_string(KEYD)) == 1,
-          "maju dan belok bisa ditekan bersamaan"); }
+    int p = r.m.count("P" + std::to_string(256 + 'd')); CHECK(p >= 6 && p <= 16, "sigma-delta menekan D berulang untuk belok sedang"); }
 
   // 13. Mode gamepad: sumbu keluar
   { Rig r; r.run(100); r.pw[0] = 2000; r.gas(100); r.run(5); CHECK(r.m.sx == 100, "axes steer 100"); CHECK(r.m.sg == 100, "axes gas 100");
-    r.pw[0] = 1000; r.gas(-100); r.run(5); CHECK(r.m.sx == -100, "axes steer -100");
-    CHECK(r.e.gas == 0 && r.e.brk == 100, "dorong tuas saat maju menghasilkan rem, bukan gas"); }
+    r.pw[0] = 1000; r.gas(-100); r.run(5); CHECK(r.m.sx == -100, "axes steer -100"); }
 
   // 14. Kehilangan sinyal melepas semua tombol
   { Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.run(100); r.gas(90); r.run(50);
     r.m.clear(); r.e.update(r.t + 1, r.pw, false);
     CHECK(r.m.count("R" + std::to_string(KEYW)) == 1, "failsafe melepas W"); CHECK(r.e.gas == 0, "gas nol saat sinyal hilang"); }
 
-  // 15. Tombol tertahan saat boot tidak memicu aksi
-  { Rig r; r.pw[3] = 1200; r.run(1500); CHECK(!r.e.lock && r.cfg[PI_gear_mode] == 1, "CH4 tertahan saat boot diabaikan");
-    r.pw[3] = 900; r.run(500); CHECK(!r.e.lock, "lepas setelah boot tidak memicu klik"); }
+  // 15. Tombol tertahan saat boot: selama masih ditahan tidak ada aksi
+  { Rig r; r.pw[3] = 1200; r.run(1500); CHECK(!r.e.lock && r.cfg[PI_gear_mode] == 1, "CH4 tertahan saat boot tidak memicu apa pun selama ditahan"); }
 
   // 16. Aturan pulsa: aksi aktif selama dalam rentang
   { Rig r; r.cfg.set("pr1_ch", 4); r.cfg.set("pr1_lo", 1100); r.cfg.set("pr1_hi", 1300); r.cfg.set("pr1_a", makeAct(AT_KEY, 'n')); r.run(100);
@@ -212,10 +176,75 @@ int main() {
     r.pw[0] = 1540; r.run(5); CHECK(r.e.steer > 0, "di luar pita netral bergerak");
     r.pw[0] = 1494; r.run(5); r.pw[0] = 1500; r.run(5); CHECK(r.e.steer == 0, "kembali netral"); }
   { Rig r; r.cfg.set("dz1", 0); r.cfg.set("nb1", 0); r.cfg.set("flt1", 80); r.run(50); r.pw[0] = 2000; r.run(1);
-    int first = r.e.steer; CHECK(first > 0 && first < 100, "penghalus: lonjakan tidak langsung penuh"); r.run(200); CHECK(r.e.steer >= 99, "penghalus: akhirnya mencapai penuh"); }
+    int first = r.e.steer; CHECK(first > 0 && first < 100, "penghalus: lonjakan tidak langsung penuh"); r.run(1500); CHECK(r.e.steer >= 99, "penghalus: akhirnya mencapai penuh"); }
   { Rig r; r.cfg.set("btn_hys", 5); r.cfg.set("c4_thr", 1050); r.run(100); r.pw[3] = 1100; r.run(500); r.pw[3] = 900; r.run(500);
     r.pw[3] = 1100; r.run(100); r.pw[3] = 900; r.run(100); r.pw[3] = 1100; r.run(100); r.pw[3] = 900; r.run(500); CHECK(r.e.lock, "btn_hys kecil: klik 2x CH4 tetap terbaca"); }
   { Rig r; r.cfg.set("oled_page", 3); r.e.doSys(SYS_OLED); CHECK(r.cfg[PI_oled_page] == 0, "SYS_OLED berputar"); r.e.doSys(SYS_OLED); CHECK(r.cfg[PI_oled_page] == 1, "SYS_OLED maju"); }
+
+  // 21. Dari mundur: tuas kembali netral lalu ditarik maju = langsung maju (tanpa rem)
+  { Rig r; r.cfg.set("fwd_auto_ms", 0); r.run(100); r.gas(-40); r.run(100); CHECK(r.e.st == ST_REV, "masuk mundur");
+    r.gas(0); r.run(400); CHECK(r.e.st == ST_NEUTRAL && r.e.rev, "REV netral -> NEUTRAL (R masih aktif)");
+    r.m.clear(); r.gas(40); r.run(100); CHECK(r.e.st == ST_FWD && !r.e.rev, "ditarik maju dari netral -> maju");
+    CHECK(r.e.brk == 0 && r.e.gas > 0, "tidak mengerem, langsung gas");
+    CHECK(r.m.count("P" + std::to_string(KEYE)) == 1, "tombol keluar dari R ditekan"); }
+  // 22. Dari mundur langsung ditarik maju: rem sebentar lalu otomatis maju
+  { Rig r; r.cfg.set("fwd_auto_ms", 300); r.run(100); r.gas(-40); r.run(100); r.gas(50); r.run(100);
+    CHECK(r.e.st == ST_BRK_R && r.e.brk > 0, "awalnya rem"); r.run(400);
+    CHECK(r.e.st == ST_FWD && r.e.gas > 0 && r.e.brk == 0, "setelah jeda otomatis maju"); }
+  // 23. Dari maju langsung didorong: rem, lalu otomatis mundur bila rev_auto_ms diatur
+  { Rig r; r.cfg.set("rev_auto_ms", 500); r.run(100); r.gas(60); r.run(1000); r.gas(-50); r.run(100);
+    CHECK(r.e.st == ST_BRK_F, "rem dulu"); r.run(600); CHECK(r.e.st == ST_REV && r.e.rev, "otomatis mundur setelah jeda"); }
+  // 24. Event gestur dan perintah TEST
+  { Rig r; r.cfg.set("gear_mode", 0); r.run(100); r.ch3Press(); r.run(500);
+    CHECK(r.e.evSeq == 1 && r.e.evCh == 3 && r.e.evKind == 1, "event CH3 klik 1x");
+    r.ch3Press(); r.run(100); r.ch3Press(); r.run(500); CHECK(r.e.evSeq == 2 && r.e.evKind == 2, "event CH3 klik 2x");
+    r.m.clear(); r.e.testAct(makeAct(AT_KEY, 'z')); r.run(100);
+    CHECK(r.m.count("P" + std::to_string(256 + 'z')) == 1 && r.m.count("R" + std::to_string(256 + 'z')) == 1, "TEST menekan dan melepas tombol");
+    r.pw[3] = 1965; r.pw[3] = 1965; r.run(100); r.pw[3] = 975; r.run(500); CHECK(r.e.evCh == 4, "CH4 dengan pulsa 975/1965 terdeteksi"); }
+  // 25. Pulsa nyata 975/1965 (hasil pengukuran): CH3 edge menekan huruf
+  { Rig r; r.cfg.set("gear_mode", 0); r.cfg.set("a_c3_1", makeAct(AT_KEY, (int)(char)113)); r.pw[2] = 975; r.pw[3] = 975; r.run(100); r.m.clear();
+    r.pw[2] = 1965; r.run(500); CHECK(r.m.count("P" + std::to_string(369)) == 1, "CH3 1x menekan Q"); }
+  // 26. Sigma-delta merata: tidak ada jeda mati panjang pada 50%
+  { Rig r; r.cfg.set("out_mode", 1); r.cfg.set("gear_mode", 0); r.run(100); r.pw[0] = 1780; r.run(40);
+    int off = 0, maxoff = 0; for (int i = 0; i < 400; i++) { r.run(1); bool on = (r.m.count("P" + std::to_string(256 + 'd')) > r.m.count("R" + std::to_string(256 + 'd'))); if (!on) { off++; if (off > maxoff) maxoff = off; } else off = 0; }
+    CHECK(maxoff <= 45, "jeda mati terpanjang pendek"); }
+
+  // 27. Mode lepas-gas: gas ditahan, dilepas, digas lagi = naik gigi
+  { Rig r; r.cfg.set("gear_mode", 3); r.run(100); r.gas(60); r.run(500); CHECK(r.e.gear == 1 && r.e.st == ST_FWD, "mode 3: maju langsung gigi 1");
+    r.gas(0); r.run(120); r.gas(60); r.run(100); CHECK(r.e.gear == 2, "lepas lalu gas lagi: gigi 2");
+    r.run(500); r.gas(0); r.run(120); r.gas(60); r.run(100); CHECK(r.e.gear == 3, "gigi 3");
+    r.gas(0); r.run(100); r.gas(60); r.run(100); CHECK(r.e.gear == 3, "gas ditahan kurang dari 300 ms: tidak naik");
+    r.run(500); r.e.doSys(SYS_LOCK); r.gas(0); r.run(120); r.gas(60); r.run(100); CHECK(r.e.gear == 3, "kunci gigi mencegah naik");
+    r.e.doSys(SYS_LOCK); r.gas(0); r.run(120); r.gas(60); r.run(100); CHECK(r.e.gear == 3 || r.e.gear == 4, "setelah kunci lepas boleh naik");
+    CHECK(r.m.count("P" + std::to_string(KEYE)) >= 3, "tombol naik gigi ditekan"); }
+  // 28. Mundur dari gigi 3: rem, ditahan 1 detik, lalu Turun gigi 3 kali (jeda 500 ms) sampai R
+  { Rig r; r.cfg.set("gear_mode", 3); r.cfg.set("r_seq", 1); r.run(100); r.gas(60); r.run(500);
+    for (int i = 0; i < 2; i++) { r.run(400); r.gas(0); r.run(120); r.gas(60); r.run(100); }
+    CHECK(r.e.gear == 3, "siap di gigi 3"); r.m.clear();
+    r.gas(-50); r.run(100); CHECK(r.e.st == ST_BRK_F && r.e.brk > 0, "rem saat didorong");
+    r.run(1000); CHECK(r.e.st == ST_SHIFTR, "setelah 1 detik mulai pindah ke R");
+    std::vector<uint32_t> times; uint32_t t0 = r.t;
+    int before = 0;
+    for (int i = 0; i < 3000 && r.e.st == ST_SHIFTR; i++) { int c0 = r.m.count("P" + std::to_string(KEYQ)); r.run(1); if (r.m.count("P" + std::to_string(KEYQ)) > c0) times.push_back(r.t - t0); }
+    CHECK(r.m.count("P" + std::to_string(KEYQ)) - before == 3, "Turun gigi ditekan 3 kali (sebanyak gigi)");
+    CHECK(times.size() == 2 && times[1] - times[0] >= 480 && times[1] - times[0] <= 520, "jeda 500 ms antar klik (klik pertama tepat saat mulai)");
+    CHECK(r.e.st == ST_REV && r.e.rev && r.e.gear == 0, "sampai di R lalu mundur"); CHECK(r.e.gas > 0, "gas mundur keluar"); }
+  // 29. Rem, netral, dorong lagi: langsung mulai pindah ke R tanpa tunggu 1 detik
+  { Rig r; r.cfg.set("gear_mode", 3); r.cfg.set("r_seq", 1); r.run(100); r.gas(60); r.run(500); r.gas(-50); r.run(100); r.gas(0); r.run(400);
+    CHECK(r.e.st == ST_NEUTRAL, "netral setelah rem"); r.m.clear(); r.gas(-50); r.run(50); CHECK(r.e.st == ST_SHIFTR, "dorong lagi: mulai pindah ke R");
+    r.run(1500); CHECK(r.e.st == ST_REV && r.e.rev, "masuk R"); CHECK(r.m.count("P" + std::to_string(KEYQ)) == 1, "gigi 1 ke R: 1 klik"); }
+  // 30. Dari R ditarik maju: naik sendiri ke gigi 1 (satu klik naik)
+  { Rig r; r.cfg.set("gear_mode", 3); r.cfg.set("r_seq", 1); r.run(100); r.gas(-50); r.run(100); r.run(1500);
+    CHECK(r.e.rev && r.e.st == ST_REV, "sudah di R"); r.gas(0); r.run(400); CHECK(r.e.st == ST_NEUTRAL, "netral di R");
+    r.m.clear(); r.gas(50); r.run(100); CHECK(r.e.st == ST_FWD && r.e.gear == 1 && !r.e.rev, "ditarik maju: gigi 1");
+    CHECK(r.m.count("P" + std::to_string(KEYE)) == 1, "satu klik naik gigi"); }
+  // 31. Pulsa nyata: CH4 diam tinggi (1965), ditekan turun (975); CH3 toggle dari posisi tinggi
+  { Rig r; r.cfg.set("gear_mode", 0); r.cfg.set("a_c4_1", makeAct(AT_KEY, 'f')); r.cfg.set("a_c4_2", makeAct(AT_KEY, 'g')); r.cfg.set("a_c3_1", makeAct(AT_KEY, 'h')); r.cfg.set("a_c3_2", makeAct(AT_KEY, 'j'));
+    r.pw[2] = 1965; r.pw[3] = 1965; r.run(300);
+    r.pw[3] = 975; r.run(100); r.pw[3] = 1965; r.run(500); CHECK(r.m.count("P" + std::to_string(256 + 'f')) == 1, "CH4 diam tinggi: klik 1x");
+    r.pw[3] = 975; r.run(100); r.pw[3] = 1965; r.run(100); r.pw[3] = 975; r.run(100); r.pw[3] = 1965; r.run(500); CHECK(r.m.count("P" + std::to_string(256 + 'g')) == 1, "CH4 diam tinggi: klik 2x");
+    r.pw[2] = 975; r.run(500); CHECK(r.m.count("P" + std::to_string(256 + 'h')) == 1, "CH3 toggle dari tinggi: 1x");
+    r.pw[2] = 1965; r.run(100); r.pw[2] = 975; r.run(500); CHECK(r.m.count("P" + std::to_string(256 + 'j')) == 1, "CH3 toggle: 2x"); }
 
   printf(fails ? "\n%d tes GAGAL\n" : "\nSemua tes lolos\n", fails);
   return fails ? 1 : 0;

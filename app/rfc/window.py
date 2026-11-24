@@ -26,7 +26,7 @@ class NavButton(QAbstractButton):
         self.setText(text)
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(36)
+        self.setFixedHeight(35)
         self._h = 0.0
         self._a = QVariantAnimation(self)
         self._a.setDuration(160)
@@ -52,7 +52,13 @@ class NavButton(QAbstractButton):
         c = self.theme.c
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        if self._h > 0 and not self.isChecked():
+        if self.isChecked():
+            bg = QColor(c["accent"])
+            bg.setAlphaF(0.14)
+            p.setPen(Qt.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(self.rect()), 10, 10)
+        elif self._h > 0:
             bg = QColor(c["surface2"])
             bg.setAlphaF(self._h)
             p.setPen(Qt.NoPen)
@@ -121,7 +127,7 @@ class MainWindow(QWidget):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(resource_path("assets/icon.png")))
         self.resize(1240, 780)
-        self.setMinimumSize(1020, 700)
+        self.setMinimumSize(1040, 720)
         self.store = ParamStore()
         self.links = {"usb": Link(), "wifi": TcpLink(), "ble": BleLink(), "demo": FakeLink()}
         self.link = self.links["usb"]
@@ -141,12 +147,12 @@ class MainWindow(QWidget):
         main.addWidget(self.stack, 1)
         root.addLayout(main, 1)
 
-        self.pages = [Dashboard(self.ctx), Connection(self.ctx), PulseLab(self.ctx), SteerThrottle(self.ctx),
-                      Gears(self.ctx), Buttons(self.ctx), Output(self.ctx), Led(self.ctx), Oled(self.ctx),
-                      Wiring(self.ctx), Profiles(self.ctx), Firmware(self.ctx)]
+        self.pages = [Dashboard(self.ctx), PulseLab(self.ctx), SteerThrottle(self.ctx), Gears(self.ctx),
+                      Buttons(self.ctx), Output(self.ctx), Led(self.ctx), Oled(self.ctx),
+                      Connection(self.ctx), Wiring(self.ctx), Profiles(self.ctx), Firmware(self.ctx)]
         for p in self.pages:
             self.stack.addWidget(p)
-        self.page_conn, self.page_fw = self.pages[1], self.pages[11]
+        self.page_conn, self.page_fw = self.pages[8], self.pages[11]
         self.ctx.restart = self.page_conn.save_reboot
         self.page_conn.bind(self)
         self.nav[0].setChecked(True)
@@ -155,6 +161,7 @@ class MainWindow(QWidget):
         for l in self.links.values():
             l.stateChanged.connect(self._state)
             l.live.connect(self._live)
+            l.gesture.connect(self._gesture)
             l.paramsReceived.connect(self.store.apply_device)
             l.message.connect(lambda m: self.toast.show_text(m, bad=True))
         self.store.attach(self.link)
@@ -186,19 +193,25 @@ class MainWindow(QWidget):
         pp.end()
         pm.setDevicePixelRatio(2)
         logo.setPixmap(pm)
-        t = QLabel("RF Controller")
+        t = QLabel("RF CONTROL")
         t.setFont(head_font(16))
         brand.addWidget(logo)
         brand.addWidget(t, 1)
         v.addLayout(brand)
         v.addSpacing(14)
         self.nav = []
-        items = [("dash", "Dashboard"), ("plug", "Koneksi"), ("pulse", "Deteksi pulsa"), ("wheel", "Setir dan gas"),
-                 ("gear", "Gigi"), ("button", "Tombol dan gestur"), ("output", "Output"), ("led", "LED"),
-                 ("oled", "OLED"), ("wire", "Wiring"), ("profile", "Profil"), ("chip", "Firmware")]
+        items = [("dash", "Dashboard"), ("pulse", "Deteksi pulsa"), ("wheel", "Setir dan gas"), ("gear", "Gigi"),
+                 ("button", "Tombol dan gestur"), ("output", "Output"), ("led", "LED"), ("oled", "OLED"),
+                 ("plug", "Koneksi"), ("wire", "Wiring"), ("profile", "Profil"), ("chip", "Firmware")]
+        groups = {0: "PANTAU", 2: "ATUR", 6: "PERANGKAT", 8: "SISTEM"}
         self.indicator = QWidget(side)
         self.indicator.setFixedSize(3, 20)
         for i, (ic, tx) in enumerate(items):
+            if i in groups:
+                gl = QLabel(groups[i])
+                gl.setStyleSheet("color: %s; font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 10px 0 2px 6px;" % self.theme.c["muted"])
+                gl.setProperty("navgroup", True)
+                v.addWidget(gl)
             b = NavButton(ic, tx, self.theme)
             b.clicked.connect(lambda _=False, i=i: self._go(i))
             self.nav.append(b)
@@ -268,7 +281,7 @@ class MainWindow(QWidget):
         self.unsaved.hide()
         h.addWidget(self.unsaved)
         self.pill = StatusPill(self.theme)
-        self.pill.clicked.connect(lambda: self._go(1))
+        self.pill.clicked.connect(lambda: self._go(8))
         h.addWidget(self.pill)
         self.b_disc = QPushButton("Putuskan")
         self.b_disc.clicked.connect(self.disconnect)
@@ -338,6 +351,16 @@ class MainWindow(QWidget):
         self.store.apply_live_mode("out_mode", d["omode"])
         for p in self.pages:
             p.feed_live(d)
+
+    def _gesture(self, ch, kind, act):
+        if self.sender() is not self.link:
+            return
+        from .params import describe_act
+        names = {1: "klik 1x", 2: "klik 2x", 3: "klik 3x", 9: "tahan lama", 0: "tes"}
+        who = "Tes" if ch == 0 else "CH%d" % ch
+        self.toast.show_text("%s %s → %s" % (who, names.get(kind, "?"), describe_act(act)))
+        for p in self.pages:
+            p.on_gesture(ch, kind, act)
 
     def _save(self):
         if self.store.save_to_device():

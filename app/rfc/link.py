@@ -39,6 +39,8 @@ class LineParser:
             if head == "W" and len(parts) >= 3:
                 p4 = line.split(None, 3)
                 return ("wifi", int(p4[1]), p4[2], p4[3] if len(p4) > 3 else "-")
+            if head == "E" and len(parts) == 4:
+                return ("event", int(parts[1]), int(parts[2]), int(parts[3]))
             if head == "OK":
                 return ("ok",)
             if head == "ERR":
@@ -53,6 +55,7 @@ class Link(QObject):
     live = Signal(dict)
     paramsReceived = Signal(dict)
     wifiInfo = Signal(int, str, str)
+    gesture = Signal(int, int, int)   # channel, jenis (1-3 klik, 9 tahan, 0 tes), aksi
     message = Signal(str)
     kind = "usb"
 
@@ -79,7 +82,7 @@ class Link(QObject):
     def list_ports():
         out = []
         for p in QSerialPortInfo.availablePorts():
-            rf = p.vendorIdentifier() == 0x303A or "RF Controller" in p.description()
+            rf = p.vendorIdentifier() == 0x303A or "RF CONTROL" in p.description().upper()
             label = "%s  %s" % (p.portName(), p.description() or "Serial")
             out.append((p.portName(), label, rf))
         out.sort(key=lambda x: (not x[2], x[0]))
@@ -120,7 +123,7 @@ class Link(QObject):
         if self._tries < 3:
             self._ping()
         else:
-            self.message.emit("Perangkat tidak menjawab. Pastikan firmware RF Controller sudah di-flash dan port yang dipilih benar.")
+            self.message.emit("Perangkat tidak menjawab. Pastikan firmware RF CONTROL sudah di-flash dan port yang dipilih benar.")
             self.close()
 
     def _read(self):
@@ -142,6 +145,8 @@ class Link(QObject):
             self.paramsReceived.emit(r[1])
         elif r[0] == "wifi":
             self.wifiInfo.emit(r[1], r[2], r[3])
+        elif r[0] == "event":
+            self.gesture.emit(r[1], r[2], r[3])
         elif r[0] == "pong":
             self._hs.stop()
             self.fw = r[1]
@@ -211,8 +216,12 @@ class FakeLink(Link):
         c = self.cfg
         p1 = int(c["c1_mid"] + steer * (c["c1_max"] - c["c1_mid"]))
         p2 = int(c["c2_mid"] + thr * (c["c2_max"] - c["c2_mid"]))
-        p3 = 1200 if int(t / 4) % 2 else 900
-        p4 = 1200 if (t % 9) > 8 else 900
+        p3 = 1965 if int(t / 4) % 2 else 975
+        p4 = 1965 if (t % 9) > 8 else 975
+        n = int(t / 6)
+        if n != getattr(self, "_ev_n", -1):
+            self._ev_n = n
+            self.gesture.emit(3 if n % 2 else 4, 1 + n % 3, 357)
         gas = max(0, int(thr * 100))
         brk = max(0, int(-thr * 100))
         gmax = c["g_max"]
@@ -339,7 +348,7 @@ class BleLink(Link):
             return
         self.devices[info.address().toString() or info.deviceUuid().toString()] = (name, info)
         items = [(("%s  (%s)" % (n, k)), k) for k, (n, _) in self.devices.items()]
-        items.sort(key=lambda x: ("RF Controller" not in x[0], x[0]))
+        items.sort(key=lambda x: ("RF CONTROL" not in x[0].upper(), x[0]))
         self.devicesChanged.emit(items)
 
     def open(self, key):
@@ -372,7 +381,7 @@ class BleLink(Link):
         QB = self.QB
         self.svc = self.ctl.createServiceObject(QB.QBluetoothUuid(NUS_SERVICE))
         if self.svc is None:
-            self.message.emit("Perangkat ini bukan RF Controller (layanan tidak ditemukan).")
+            self.message.emit("Perangkat ini bukan RF CONTROL (layanan tidak ditemukan).")
             self.close()
             return
         self.svc.stateChanged.connect(self._svc_state)

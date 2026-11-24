@@ -426,7 +426,7 @@ class GearDial(QWidget):
         p.setPen(col)
         p.drawText(box.translated(0, off), Qt.AlignCenter, self._cur)
         p.restore()
-        names = {0: "Netral", 1: "Maju", 2: "Mengerem", 3: "Mundur", 4: "Mengerem"}
+        names = {0: "Netral", 1: "Maju", 2: "Mengerem", 3: "Mundur", 4: "Mengerem", 5: "Pindah ke R"}
         p.setFont(head_font(15))
         p.setPen(QColor(c["text"]))
         p.drawText(QRectF(cx - 100, cy + side * 0.16, 200, 24), Qt.AlignCenter, names.get(self.st, ""))
@@ -583,7 +583,7 @@ class PSlider(QWidget):
         h.setContentsMargins(0, 2, 0, 2)
         h.setSpacing(12)
         self.lab = QLabel(text)
-        self.lab.setMinimumWidth(150)
+        self.lab.setFixedWidth(210)
         self.sl = QSlider(Qt.Horizontal)
         self.sl.setRange(lo, hi)
         self.sl.setSingleStep(step)
@@ -693,7 +693,7 @@ class PAction(QWidget):
         h.setContentsMargins(0, 2, 0, 2)
         h.setSpacing(8)
         lab = QLabel(text)
-        lab.setMinimumWidth(150)
+        lab.setFixedWidth(130)
         h.addWidget(lab)
         self.tc = QComboBox()
         for n in TYPE_NAMES:
@@ -702,11 +702,22 @@ class PAction(QWidget):
         self.cc.setMinimumWidth(170)
         h.addWidget(self.tc)
         h.addWidget(self.cc, 1)
+        from PySide6.QtWidgets import QPushButton
+        tb = QPushButton("Tes")
+        tb.setToolTip("Kirim aksi ini ke PC sekarang, tanpa remot")
+        tb.setFixedWidth(52)
+        tb.clicked.connect(self._test)
+        h.addWidget(tb)
         self._fill(store.get(key))
         self.tc.currentIndexChanged.connect(self._type_changed)
         self.cc.currentIndexChanged.connect(self._code_changed)
         store.changed.connect(self._ext)
         store.bulk.connect(lambda: self._ext(self.key))
+
+    def _test(self):
+        link = self.store.link
+        if link is not None and link.is_on() and self.store.get(self.key):
+            link.send("TEST %d" % self.store.get(self.key))
 
     def _fill(self, v):
         t, code = v >> 8, v & 255

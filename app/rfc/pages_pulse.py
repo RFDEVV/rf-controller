@@ -14,10 +14,10 @@ from .theme import head_font
 
 CH_NAMES = ["CH1 setir", "CH2 gas", "CH3 tombol", "CH4 tombol"]
 CH_COLORS = ["accent", "amber", "teal", "rose"]
-REST_SEC, SWEEP_SEC = 3.0, 8.0
+REST_SEC, SWEEP_SEC, PULL_SEC, RIGHT_SEC = 3.0, 6.0, 2.5, 2.5
 
 
-def analyze(rest, sweep):
+def analyze(rest, sweep, pull=None, right=None):
     """Hitung saran pengaturan dari sampel diam (rest) dan sampel gerak penuh (sweep).
     rest/sweep: daftar 4 daftar pulsa (µs). Mengembalikan (params, catatan)."""
     out, notes = {}, []
@@ -46,12 +46,31 @@ def analyze(rest, sweep):
             notes.append("CH%d: tengah %d µs, goyangan diam %d µs, rentang %d sampai %d µs." % (n, mid, jit, lo, hi))
         else:
             n = ch + 1
-            if hi - lo < 80:
-                notes.append("CH%d: perubahan pulsa tidak terlihat. Tekan tombolnya saat merekam." % n)
+            if hi - lo < 150:
+                notes.append("CH%d: perubahan pulsa tidak terlihat (butuh minimal 150 µs). Tekan tombolnya saat merekam." % n)
                 continue
-            out["c%d_thr" % n] = (lo + hi) // 2
-            out["btn_hys"] = max(out.get("btn_hys", 0), max(10, min(200, (hi - lo) // 4)))
-            notes.append("CH%d: rendah %d µs, tinggi %d µs, ambang %d µs." % (n, lo, hi, (lo + hi) // 2))
+            notes.append("CH%d: pulsa %d sampai %d µs terbaca. Polaritas dipelajari otomatis." % (n, lo, hi))
+    def mean_of(lst):
+        v = [x for x in lst if x]
+        return sum(v) / len(v) if len(v) >= 5 else None
+    if pull is not None and "c2_mid" in out:
+        pm = mean_of(pull[1])
+        if pm is None:
+            notes.append("Arah trigger: tidak ada data.")
+        elif abs(pm - out["c2_mid"]) < 100:
+            notes.append("Arah trigger: tarikan kurang jelas, ulangi dan tahan trigger.")
+        else:
+            out["inv2"] = 1 if pm < out["c2_mid"] else 0
+            notes.append("Arah trigger: ditarik = pulsa %s, jadi %s." % ("turun" if pm < out["c2_mid"] else "naik", "arah dibalik" if out["inv2"] else "arah normal"))
+    if right is not None and "c1_mid" in out:
+        rm = mean_of(right[0])
+        if rm is None:
+            notes.append("Arah setir: tidak ada data.")
+        elif abs(rm - out["c1_mid"]) < 100:
+            notes.append("Arah setir: putaran kurang jelas, ulangi dan tahan setir ke kanan.")
+        else:
+            out["inv1"] = 1 if rm < out["c1_mid"] else 0
+            notes.append("Arah setir: kanan = pulsa %s, jadi %s." % ("turun" if rm < out["c1_mid"] else "naik", "arah dibalik" if out["inv1"] else "arah normal"))
     if allv:
         out["pv_min"] = max(200, min(1000, min(allv) - 200))
         out["pv_max"] = max(2000, min(3500, max(allv) + 200))
@@ -69,10 +88,12 @@ class PulseLab(Page):
         self.seen = [[None, None] for _ in range(4)]
         self.last = [0, 0, 0, 0]
         self.sig = True
-        self.phase = 0       # 0 diam-menunggu, 1 merekam diam, 2 merekam gerak, 3 hasil
+        self.phase = 0       # 0 menunggu, 1 diam, 2 gerak, 3 tarik trigger, 4 setir kanan, 5 hasil
         self.t0 = 0.0
         self.rest = [[] for _ in range(4)]
         self.sweep = [[] for _ in range(4)]
+        self.pull = [[] for _ in range(4)]
+        self.right = [[] for _ in range(4)]
         self.result, self.notes = {}, []
 
         mon = Card("Monitor semua channel")
@@ -120,7 +141,7 @@ class PulseLab(Page):
         self.col.addWidget(mon)
 
         wz = Card("Deteksi otomatis semua channel")
-        self.instr = label("Tekan Mulai. Pertama lepas semua kontrol remot selama 3 detik, lalu gerakkan semuanya sepenuhnya selama 8 detik.", "muted", True)
+        self.instr = label("Empat langkah, sekitar 14 detik: diam, gerak penuh, tarik trigger, putar setir ke kanan. Hasilnya termasuk arah gas dan setir yang benar.", "muted", True)
         wz.v.addWidget(self.instr)
         self.prog = QProgressBar()
         self.prog.setRange(0, 1000)
@@ -152,14 +173,12 @@ class PulseLab(Page):
                 rg.v.addWidget(PSpin(s, k, t, " µs"))
             rg.v.addWidget(PSlider(s, "nb%d" % n, "Pita netral (± dari tengah)", "µs"))
             rg.v.addWidget(PSlider(s, "dz%d" % n, "Zona mati", "%"))
-            rg.v.addWidget(PSlider(s, "flt%d" % n, "Peredam noise / penghalus", "%"))
+            rg.v.addWidget(PSlider(s, "flt%d" % n, "Penghalus sinyal", "%"))
             rg.v.addWidget(PSwitch(s, "inv%d" % n, "Balik arah"))
         for n, name in ((3, "CH3 tombol"), (4, "CH4 tombol")):
             rg.v.addWidget(label(name, "h2"))
-            rg.v.addWidget(PSeg(s, "c%d_type" % n, [
-                ("Ditahan", 0), ("Pulsa sekali", 1), ("Toggle", 2),
-            ]))
-            rg.v.addWidget(PSpin(s, "c%d_thr" % n, "Ambang rendah/tinggi", " µs"))
+            rg.v.addWidget(PSeg(s, "c%d_type" % n, [("Ditahan", 0), ("Klik per tekan", 1), ("Bergantian", 2)]))
+            rg.v.addWidget(label("Polaritas tombol dipelajari otomatis dari pulsa awal, jadi 975 ke 1965 maupun 1965 ke 975 sama-sama terbaca.", "muted", True))
         rg.v.addWidget(label("Semua channel", "h2"))
         rg.v.addWidget(PSlider(s, "btn_hys", "Histeresis tombol (± dari ambang)", "µs"))
         rg.v.addWidget(PSpin(s, "pv_min", "Pulsa dianggap sah mulai", " µs"))
@@ -190,6 +209,10 @@ class PulseLab(Page):
                 self.rest[i].append(p)
             elif self.phase == 2:
                 self.sweep[i].append(p)
+            elif self.phase == 3:
+                self.pull[i].append(p)
+            elif self.phase == 4:
+                self.right[i].append(p)
         for i in range(4):
             p = self.last[i]
             c = self.cells[i]
@@ -219,6 +242,8 @@ class PulseLab(Page):
             return
         self.rest = [[] for _ in range(4)]
         self.sweep = [[] for _ in range(4)]
+        self.pull = [[] for _ in range(4)]
+        self.right = [[] for _ in range(4)]
         self.reset_seen()
         self.phase = 1
         self.t0 = time.monotonic()
@@ -227,25 +252,31 @@ class PulseLab(Page):
         self.res.setText("")
 
     def _tick(self):
-        if self.phase not in (1, 2):
+        if self.phase not in (1, 2, 3, 4):
             return
         el = time.monotonic() - self.t0
-        if self.phase == 1:
-            self.step.setText("1 dari 2. Lepas semua kontrol, jangan sentuh remot")
-            self.instr.setText("Merekam posisi diam untuk mencari titik tengah dan goyangan sinyal.")
-            self.prog.setValue(int(min(1.0, el / REST_SEC) * 500))
-            if el >= REST_SEC:
-                self.phase, self.t0 = 2, time.monotonic()
-        else:
-            self.step.setText("2 dari 2. Gerakkan semuanya sampai ujung")
-            self.instr.setText("Putar setir penuh kiri dan kanan, tarik dan dorong trigger penuh, tekan CH3 dan CH4 beberapa kali.")
-            self.prog.setValue(500 + int(min(1.0, el / SWEEP_SEC) * 500))
-            if el >= SWEEP_SEC:
+        total = REST_SEC + SWEEP_SEC + PULL_SEC + RIGHT_SEC
+        spans = {1: (0.0, REST_SEC), 2: (REST_SEC, SWEEP_SEC), 3: (REST_SEC + SWEEP_SEC, PULL_SEC), 4: (REST_SEC + SWEEP_SEC + PULL_SEC, RIGHT_SEC)}
+        texts = {
+            1: ("1 dari 4. Lepas semua kontrol, jangan sentuh remot", "Merekam posisi diam untuk mencari titik tengah dan goyangan sinyal."),
+            2: ("2 dari 4. Gerakkan semuanya sampai ujung", "Putar setir penuh kiri dan kanan, tarik dan dorong trigger penuh, tekan CH3 dan CH4 beberapa kali."),
+            3: ("3 dari 4. Tarik trigger ke arah badan (GAS) dan tahan", "Ini menentukan arah gas yang benar."),
+            4: ("4 dari 4. Putar setir ke KANAN dan tahan", "Ini menentukan arah belok yang benar."),
+        }
+        start, dur = spans[self.phase]
+        self.step.setText(texts[self.phase][0])
+        self.instr.setText(texts[self.phase][1])
+        self.prog.setValue(int(min(1.0, (start + min(el, dur)) / total) * 1000))
+        if el >= dur:
+            if self.phase == 4:
                 self.finish_wizard()
+            else:
+                self.phase += 1
+                self.t0 = time.monotonic()
 
     def finish_wizard(self):
-        self.phase = 3
-        self.result, self.notes = analyze(self.rest, self.sweep)
+        self.phase = 5
+        self.result, self.notes = analyze(self.rest, self.sweep, self.pull, self.right)
         self.step.setText("Selesai")
         self.instr.setText("Periksa hasil di bawah. Tekan Terapkan hasil untuk memakainya, atau Mulai deteksi untuk mengulang.")
         self.res.setText("<br>".join(self.notes) if self.notes else "Tidak ada hasil.")
@@ -338,7 +369,7 @@ class OledPreview(QWidget):
         p.setPen(QPen(fg, 1))
         if page == 0:
             self._text(p, 0, 9, ["PAD", "KEY", "MOUSE"][s.get("out_mode") % 3])
-            self._text(p, 36, 9, ["GIGI OFF", "AUTO", "MANUAL"][s.get("gear_mode") % 3])
+            self._text(p, 36, 9, ["GIGI OFF", "AUTO", "MANUAL", "PUMP"][s.get("gear_mode") % 4])
             if d["lock"]:
                 self._text(p, 92, 9, "LOCK")
             p.drawLine(0, 12, 128, 12)
@@ -349,7 +380,7 @@ class OledPreview(QWidget):
                 return
             g = "R" if d["rev"] else ("N" if d["gear"] == 0 else str(d["gear"]))
             self._text(p, 8, 54, g, 38, True)
-            self._text(p, 52, 25, ["NETRAL", "MAJU", "REM", "MUNDUR", "REM"][d["st"] % 5])
+            self._text(p, 52, 25, ["NETRAL", "MAJU", "REM", "MUNDUR", "REM", "KE R"][d["st"] % 6])
             self._text(p, 52, 38, "GAS")
             self._bar(p, 76, 30, 50, 9, d["gas"], False)
             self._text(p, 52, 51, "REM")

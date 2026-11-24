@@ -1,2 +1,2 @@
-APP_NAME = "RF Controller"
-APP_VERSION = "1.0.0"
+APP_NAME = "RF CONTROL"
+APP_VERSION = "1.4.0"

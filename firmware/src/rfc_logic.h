@@ -28,7 +28,7 @@ static const ParamInfo PARAMS[PI_COUNT] = {
 
 enum ActType { AT_NONE = 0, AT_KEY = 1, AT_PAD = 2, AT_MOUSE = 3, AT_SYS = 4 };
 enum SysCode { SYS_GUP = 1, SYS_GDN = 2, SYS_MODE = 3, SYS_LOCK = 4, SYS_OUT = 5, SYS_OLED = 6 };
-enum State { ST_NEUTRAL = 0, ST_FWD = 1, ST_BRK_F = 2, ST_REV = 3, ST_BRK_R = 4 };
+enum State { ST_NEUTRAL = 0, ST_FWD = 1, ST_BRK_F = 2, ST_REV = 3, ST_BRK_R = 4, ST_SHIFTR = 5 };
 
 static const int ACT_MAX = 1280;
 inline int actType(int a) { return a >> 8; }
@@ -91,44 +91,113 @@ struct Sink {
 };
 
 struct Gesture {
-  bool init = false, lvl = false, longOn = false, ignoreRel = false;
-  uint32_t tPress = 0, tLast = 0;
+  bool init = false, lvl = false, candidate = false;
+  bool longOn = false, ignoreRel = false, baselineReady = false;
+  uint32_t candidateSince = 0, tPress = 0, tLast = 0;
+  float baseline = 0.0f;
   int clicks = 0;
   int click = 0;
   bool longStart = false, longEnd = false;
 
+  static const uint32_t DEBOUNCE_MS = 35;
+  static const int PRESS_DELTA_US = 150;
+  static const int RELEASE_DELTA_US = 130;
+
   void reset() {
-    init = false; lvl = false; longOn = false; ignoreRel = false; clicks = 0;
-    click = 0; longStart = longEnd = false;
+    init = false; lvl = false; candidate = false;
+    longOn = false; ignoreRel = false; baselineReady = false;
+    candidateSince = tPress = tLast = 0;
+    baseline = 0.0f;
+    clicks = 0; click = 0; longStart = longEnd = false;
   }
-  // type 0 = tombol momentary, 1 = satu klik saat aktif, 2 = tiap perubahan level
-  void update(uint32_t now, int pw, int thr, int type, int clickMs, int longMs, int hys = 40) {
-    click = 0; longStart = longEnd = false;
-    bool in = lvl ? (pw > thr - hys) : (pw > thr + hys);
-    if (pw == 0) in = false;
-    if (!init) {
-      init = true; lvl = in;
-      if (type == 0 && in) ignoreRel = true;
-      tLast = now - 1000;
-      return;
-    }
-    if (type == 1 || type == 2) {
-      if (in != lvl && now - tLast >= 40) {
-        lvl = in;
-        if (type == 2 || in) { clicks++; tLast = now; }
+
+  // type 0 = momentary: one click is finalized on release;
+  // type 1 = multi-click counted on each press edge;
+  // type 2 = multi-click counted on every stable transition.
+  // Baseline is learned from the first valid receiver pulse, so either
+  // 900->1900 or 1900->900 can represent a press. This avoids fixed-polarity
+  // assumptions when the transmitter channel is reversed.
+  void update(uint32_t now, int pw, int /*thr*/, int type,
+              int clickMs, int longMs, int /*hys*/ = 40) {
+    click = 0;
+    longStart = longEnd = false;
+
+    if (pw <= 0) {
+      // Lost channel data must not leave a virtual button held forever.
+      if (init && lvl) {
+        lvl = candidate = false;
+        if (type == 0 && !ignoreRel && !longOn) {
+          if (clicks < 3) clicks++;
+          tLast = now;
+        }
+        if (longOn) { longOn = false; longEnd = true; }
       }
-      if (clicks && now - tLast >= (uint32_t)clickMs) { click = clicks > 3 ? 3 : clicks; clicks = 0; }
+      if (clicks > 0 && (uint32_t)(now - tLast) >= (uint32_t)clickMs) {
+        click = clicks > 3 ? 3 : clicks;
+        clicks = 0;
+      }
       return;
     }
-    if (in && !lvl) { lvl = true; tPress = now; longOn = false; }
-    else if (!in && lvl) {
-      lvl = false;
-      if (ignoreRel) ignoreRel = false;
-      else if (longOn) { longOn = false; longEnd = true; }
-      else { clicks++; tLast = now; }
+
+    if (!baselineReady) {
+      baseline = (float)pw;
+      baselineReady = true;
+      init = true;
+      lvl = candidate = false;
+      candidateSince = tLast = now;
+      return;
     }
-    if (lvl && !longOn && !ignoreRel && now - tPress >= (uint32_t)longMs) { longOn = true; longStart = true; clicks = 0; }
-    if (!lvl && clicks && now - tLast >= (uint32_t)clickMs) { click = clicks > 3 ? 3 : clicks; clicks = 0; }
+
+    float delta = (float)pw - baseline;
+    float magnitude = fabsf(delta);
+    bool raw = lvl ? (magnitude >= RELEASE_DELTA_US)
+                   : (magnitude >= PRESS_DELTA_US);
+
+    // Slowly follow harmless receiver drift only while released and near baseline.
+    if (!lvl && magnitude < RELEASE_DELTA_US) {
+      baseline += ((float)pw - baseline) * 0.025f;
+    }
+
+    if (raw != candidate) {
+      candidate = raw;
+      candidateSince = now;
+    }
+
+    if (candidate != lvl && (uint32_t)(now - candidateSince) >= DEBOUNCE_MS) {
+      lvl = candidate;
+      if (lvl) {
+        tPress = now;
+        longOn = false;
+        if (type == 1 || type == 2) {
+          if (clicks < 3) clicks++;
+          tLast = now;
+        }
+      } else {
+        if (type == 2) {
+          if (clicks < 3) clicks++;
+          tLast = now;
+        } else if (type == 0) {
+          if (ignoreRel) ignoreRel = false;
+          else if (longOn) { longOn = false; longEnd = true; }
+          else { if (clicks < 3) clicks++; tLast = now; }
+        }
+      }
+    }
+
+    if (type == 0 && lvl && !longOn && !ignoreRel &&
+        (uint32_t)(now - tPress) >= (uint32_t)longMs) {
+      longOn = true;
+      longStart = true;
+      clicks = 0;
+    }
+
+    // Only finalize after release; this keeps the last press in a multi-click
+    // sequence from being emitted early while the button is still held.
+    if (clicks > 0 && (type != 0 || !lvl) &&
+        (uint32_t)(now - tLast) >= (uint32_t)clickMs) {
+      click = clicks > 3 ? 3 : clicks;
+      clicks = 0;
+    }
   }
 };
 
@@ -156,6 +225,11 @@ class Engine {
   // keadaan yang bisa dibaca (untuk tampilan live)
   int steer = 0, thr = 0, gas = 0, brk = 0, gear = 0, st = ST_NEUTRAL;
   bool rev = false, lock = false;
+  // kejadian gestur terakhir (untuk diagnosa di aplikasi)
+  unsigned evSeq = 0;
+  int evCh = 0, evKind = 0, evAct = 0;
+  void testAct(int a) { tap(a); ev(0, 0, a); }
+  int eventLine(char* buf, size_t cap) const { return snprintf(buf, cap, "E %d %d %d\n", evCh, evKind, evAct); }
 
   void resetAll() {
     releaseAll();
@@ -163,12 +237,15 @@ class Engine {
     fa[0] = fa[1] = 0;
     g3.reset(); g4.reset();
     inNz = false; longAct = 0; npend = 0; wasSig = false;
+    seqLeft = 0; pHeld = pArmed = false;
     lastOm = cfg[PI_out_mode];
     memset(ruleOn, 0, sizeof(ruleOn)); memset(kbOn, 0, sizeof(kbOn));
   }
 
   void update(uint32_t now, const uint16_t pw[4], bool sig) {
     tnow = now;
+    dtF = (lastUpd && now - lastUpd < 100) ? (float)(now - lastUpd) : 0.f;
+    lastUpd = now;
     if (!sig) {
       if (wasSig) failsafe();
       wasSig = false;
@@ -206,7 +283,7 @@ class Engine {
         if (gm != 2 || rev) break;
         if (gear > 1) shiftTo(gear - 1);
         break;
-      case SYS_MODE: cfg.v[PI_gear_mode] = (gm == 1) ? 2 : 1; break;
+      case SYS_MODE: cfg.v[PI_gear_mode] = (gm == 0) ? 3 : (gm == 3 ? 1 : (gm == 1 ? 2 : 3)); break;
       case SYS_LOCK: lock = !lock; break;
       case SYS_OUT: cfg.v[PI_out_mode] = (cfg[PI_out_mode] + 1) % 3; break;
       case SYS_OLED: cfg.v[PI_oled_page] = (cfg[PI_oled_page] + 1) % 4; break;
@@ -226,6 +303,15 @@ class Engine {
   bool inNz = false, wasSig = false;
   int lastOm = 0, longAct = 0, mouseAcc = 0;
   uint8_t cnt[ACT_MAX];
+  uint32_t brkT = 0;
+  int seqLeft = 0, seqAct = 0;
+  uint32_t seqNext = 0;
+  bool pHeld = false, pArmed = false;
+  uint32_t pHeldT = 0, pRelT = 0;
+  int sdAcc[4] = {0, 0, 0, 0};
+  bool sdOut[4] = {false, false, false, false};
+  uint32_t sdSlot[4] = {0, 0, 0, 0};
+  void ev(int ch, int kind, int act) { evSeq++; evCh = ch; evKind = kind; evAct = act; }
   struct Pend { int act; uint32_t due; } pend[16];
   int npend = 0;
   Gesture g3, g4;
@@ -259,21 +345,26 @@ class Engine {
     npend = 0;
     memset(ruleOn, 0, sizeof(ruleOn)); memset(kbOn, 0, sizeof(kbOn));
     longAct = 0; mouseAcc = 0;
+    for (int i = 0; i < 4; i++) { sdAcc[i] = 0; sdOut[i] = false; }
   }
   void failsafe() {
     releaseAll();
     steer = thr = gas = brk = 0;
     st = ST_NEUTRAL; inNz = false; fa[0] = fa[1] = 0;
+    seqLeft = 0; pHeld = pArmed = false;
     g3.reset(); g4.reset();
     sink.axes(0, 0, 0);
   }
 
   // Penghalus (EMA) dan pita netral dalam mikrodetik supaya posisi diam tetap tepat di tengah.
   float fa[2] = {0, 0};
+  float dtF = 0;
+  uint32_t lastUpd = 0;
   int cond(int p, int i) {
     if (p <= 0) { fa[i] = 0; return 0; }
-    float k = cfg.v[PI_flt1 + i] / 100.f;
-    fa[i] = (fa[i] <= 0) ? (float)p : fa[i] * k + (float)p * (1.f - k);
+    float tau = cfg.v[PI_flt1 + i] * 2.f;  // konstanta waktu penghalus dalam ms
+    float a = tau <= 0 ? 1.f : dtF / (tau + dtF);
+    fa[i] = (fa[i] <= 0) ? (float)p : fa[i] + a * ((float)p - fa[i]);
     int v = (int)lroundf(fa[i]);
     int mid = i == 0 ? cfg[PI_c1_mid] : cfg[PI_c2_mid];
     if (abs(v - mid) <= cfg.v[PI_nb1 + i]) v = mid;
@@ -283,13 +374,9 @@ class Engine {
   void buttons(const uint16_t* pw) {
     g3.update(tnow, pw[2], cfg[PI_c3_thr], cfg[PI_c3_type], cfg[PI_click_ms], cfg[PI_long_ms], cfg[PI_btn_hys]);
     g4.update(tnow, pw[3], cfg[PI_c4_thr], cfg[PI_c4_type], cfg[PI_click_ms], cfg[PI_long_ms], cfg[PI_btn_hys]);
-    if (g3.click == 1) tap(cfg[PI_a_c3_1]);
-    else if (g3.click == 2) tap(cfg[PI_a_c3_2]);
-    else if (g3.click == 3) tap(cfg[PI_a_c3_3]);
-    if (g4.click == 1) tap(cfg[PI_a_c4_1]);
-    else if (g4.click == 2) tap(cfg[PI_a_c4_2]);
-    else if (g4.click == 3) tap(cfg[PI_a_c4_3]);
-    if (g4.longStart) { longAct = cfg[PI_a_c4_l]; inc(longAct); }
+    if (g3.click) { int a = cfg.v[PI_a_c3_1 + g3.click - 1]; ev(3, g3.click, a); tap(a); }
+    if (g4.click) { int a = cfg.v[PI_a_c4_1 + g4.click - 1]; ev(4, g4.click, a); tap(a); }
+    if (g4.longStart) { longAct = cfg[PI_a_c4_l]; ev(4, 9, longAct); inc(longAct); }
     if (g4.longEnd && longAct) { dec(longAct); longAct = 0; }
   }
 
@@ -321,15 +408,23 @@ class Engine {
   }
   void enterFwd() {
     st = ST_FWD;
-    if (rev) { rev = false; gear = 0; engageFirst(true); }
-    else if (gear == 0 && cfg[PI_gear_mode] == 2) engageFirst(false);
+    int gm = cfg[PI_gear_mode];
+    if (rev) { rev = false; gear = 0; engageFirst(true); }          // masih R: naik sendiri ke gigi 1
+    else if (gear == 0 && (gm == 2 || gm == 3)) engageFirst(false);  // masih netral: naik sendiri
   }
+  // Mulai mundur. Dengan r_seq=1, tombol Turun gigi ditekan sebanyak gigi sekarang (jeda seq_delay_ms) sampai gigi R.
   void enterRev() {
-    st = ST_REV;
-    if (!rev) {
-      rev = true; gear = 0;
-      if (cfg[PI_gear_mode] != 0) tap(cfg[PI_a_gr]);
+    if (rev) { st = ST_REV; return; }
+    if (cfg[PI_gear_mode] == 0) { rev = true; gear = 0; st = ST_REV; return; }
+    if (cfg[PI_r_seq] && !cfg[PI_g_direct]) {
+      seqLeft = gear > 0 ? gear : 1;
+      seqAct = cfg[PI_a_gdn];
+      seqNext = tnow;
+      st = ST_SHIFTR;
+      return;
     }
+    tap(cfg[PI_a_gr]);
+    rev = true; gear = 0; st = ST_REV;
   }
 
   void settle(int state) {
@@ -353,27 +448,75 @@ class Engine {
         else if (t < -bt) { enterRev(); gas = -t; }
         break;
       case ST_FWD:
-        if (t < -bt) { st = ST_BRK_F; inNz = false; brk = -t; }
+        if (t < -bt) { st = ST_BRK_F; brkT = tnow; inNz = false; brk = -t; }
         else gas = t > 0 ? t : 0;
         break;
       case ST_BRK_F:
         if (t > z) { st = ST_FWD; inNz = false; gas = t; }
-        else if (t < -z) { brk = -t; inNz = false; }
-        else settle(ST_NEUTRAL);
+        else if (t < -z) {
+          brk = -t; inNz = false;
+          int ra = cfg[PI_rev_auto_ms];
+          if (ra > 0 && tnow - brkT >= (uint32_t)ra) { enterRev(); if (st == ST_REV) { brk = 0; gas = -t; } }
+        } else settle(ST_NEUTRAL);
         break;
       case ST_REV:
-        if (t > bt) { st = ST_BRK_R; inNz = false; brk = t; }
-        else gas = t < 0 ? -t : 0;
+        if (t > bt) { st = ST_BRK_R; brkT = tnow; inNz = false; brk = t; }
+        else {
+          gas = t < 0 ? -t : 0;
+          if (abs(t) <= z) settle(ST_NEUTRAL); else inNz = false;
+        }
         break;
+      case ST_SHIFTR: {
+        brk = t < -z ? -t : 0;   // rem tetap ditahan selama pindah ke R
+        if (seqLeft > 0 && (int32_t)(tnow - seqNext) >= 0) {
+          tap(seqAct);
+          seqLeft--;
+          if (gear > 0) gear--;
+          uint32_t d = (uint32_t)cfg[PI_seq_delay_ms];
+          seqNext = tnow + (seqLeft > 0 ? d : (d < 300 ? d : 300));
+        } else if (seqLeft == 0 && (int32_t)(tnow - seqNext) >= 0) {
+          gear = 0; rev = true; inNz = false;
+          if (t < -bt) { st = ST_REV; brk = 0; gas = -t; } else st = ST_NEUTRAL;
+        }
+        break;
+      }
       case ST_BRK_R:
         if (t < -z) { st = ST_REV; inNz = false; gas = -t; }
-        else if (t > z) { brk = t; inNz = false; }
-        else settle(ST_NEUTRAL);
+        else if (t > z) {
+          brk = t; inNz = false;
+          int fa2 = cfg[PI_fwd_auto_ms];
+          if (fa2 > 0 && tnow - brkT >= (uint32_t)fa2) { enterFwd(); brk = 0; gas = t; }
+        } else settle(ST_NEUTRAL);
         break;
     }
   }
 
+  // Mode "lepas-gas": gas ditahan, dilepas ke netral, lalu digas lagi = naik satu gigi.
+  void pump() {
+    if (st != ST_FWD) { pHeld = false; pArmed = false; return; }
+    int bt = cfg[PI_brk_th], z = cfg[PI_nz];
+    bool pulling = thr > bt, released = abs(thr) <= z;
+    if (pulling) {
+      if (!pHeld) {
+        pHeld = true; pHeldT = tnow;
+        if (pArmed) {
+          uint32_t rel = tnow - pRelT;
+          if (rel >= (uint32_t)cfg[PI_pump_rel_ms] && rel <= (uint32_t)cfg[PI_pump_win_ms] &&
+              gear >= 1 && gear < cfg[PI_g_max] && !lock)
+            shiftTo(gear + 1);
+          pArmed = false;
+        }
+      }
+    } else if (released) {
+      if (pHeld) {
+        pHeld = false;
+        if (tnow - pHeldT >= (uint32_t)cfg[PI_pump_hold_ms]) { pArmed = true; pRelT = tnow; } else pArmed = false;
+      }
+    }
+  }
+
   void autoGear() {
+    if (cfg[PI_gear_mode] == 3) { pump(); return; }
     if (cfg[PI_gear_mode] != 1 || st != ST_FWD) return;
     if (tnow - lastShift < (uint32_t)cfg[PI_g_dwell]) return;
     int gmax = cfg[PI_g_max];
@@ -382,14 +525,17 @@ class Engine {
     else if (gear > 1 && gas < T(gear) - cfg[PI_g_hyst]) shiftTo(gear - 1);
   }
 
-  bool duty(int pct) const {
-    if (pct < cfg[PI_kb_dz]) return false;
-    if (!cfg[PI_kb_pwm] || pct >= 95) return true;
-    int period = cfg[PI_kb_period];
-    int on = pct * period / 100;
-    if (on < 4) return false;
-    if (period - on < 4) return true;
-    return (int)(tnow % (uint32_t)period) < on;
+  // Sigma-delta: tombol ditekan/dilepas merata per slot waktu, rata-rata sesuai persen. Lebih halus dari satu blok per periode.
+  bool sd(int i, int pct, bool pwm) {
+    if (pct < cfg[PI_kb_dz]) { sdAcc[i] = 0; sdOut[i] = false; return false; }
+    if (!pwm || pct >= 95) { sdAcc[i] = 0; sdOut[i] = true; return true; }
+    uint32_t slot = tnow / (uint32_t)cfg[PI_kb_slot];
+    if (slot != sdSlot[i]) {
+      sdSlot[i] = slot;
+      sdAcc[i] += pct;
+      if (sdAcc[i] >= 100) { sdAcc[i] -= 100; sdOut[i] = true; } else sdOut[i] = false;
+    }
+    return sdOut[i];
   }
   void kbSet(int i, bool want, int code) {
     if (want && !kbOn[i]) { kbOn[i] = true; kbAct[i] = makeAct(AT_KEY, code); inc(kbAct[i]); }
@@ -405,8 +551,8 @@ class Engine {
     }
     sink.axes(0, 0, 0);
     if (om == 1) {
-      kbSet(0, steer < 0 && duty(-steer), cfg[PI_k_left]);
-      kbSet(1, steer > 0 && duty(steer), cfg[PI_k_right]);
+      kbSet(0, steer < 0 && sd(0, -steer, cfg[PI_kb_pwm]), cfg[PI_k_left]);
+      kbSet(1, steer > 0 && sd(1, steer, cfg[PI_kb_pwm]), cfg[PI_k_right]);
     } else {
       kbSet(0, false, 0); kbSet(1, false, 0);
       if (tnow - mouseT >= 8) {
@@ -417,8 +563,8 @@ class Engine {
         if (dx) sink.mouse(dx);
       }
     }
-    kbSet(2, gas > 0 && duty(gas), cfg[PI_k_fwd]);
-    kbSet(3, brk > 0 && duty(brk), cfg[PI_k_back]);
+    kbSet(2, gas > 0 && sd(2, gas, cfg[PI_kb_pwm_gas]), cfg[PI_k_fwd]);
+    kbSet(3, brk > 0 && sd(3, brk, cfg[PI_kb_pwm_gas]), cfg[PI_k_back]);
   }
 };
 
@@ -504,6 +650,8 @@ inline void handleLine(char* line, Config& cfg, Engine& eng, Host& h, bool& live
     cfg.defaults(); h.save(); h.write("OK\n");
   } else if (!strcmp(line, "LIVE")) {
     live = arg && atoi(arg) != 0; h.write("OK\n");
+  } else if (!strcmp(line, "TEST") && arg) {
+    eng.testAct(atoi(arg)); h.write("OK\n");
   } else if (!strcmp(line, "SYS") && arg) {
     eng.doSys(atoi(arg)); h.write("OK\n");
   } else if (!strcmp(line, "BOOTLOADER")) {

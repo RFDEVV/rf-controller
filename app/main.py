@@ -1,8 +1,8 @@
 """RF Controller: aplikasi setting untuk remot RC GA-4H + ESP32-S3."""
 import sys
 
-from PySide6.QtCore import QSettings, QVariantAnimation
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QSettings, Qt, QVariantAnimation
+from PySide6.QtGui import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
 from rfc import APP_NAME
@@ -13,7 +13,9 @@ from rfc.window import MainWindow
 
 
 def main():
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("RFBuilder")
     app.setWindowIcon(QIcon(resource_path("assets/icon.png")))

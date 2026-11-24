@@ -64,7 +64,7 @@ _PAD_HINT = {1: "A", 2: "B", 3: "C", 4: "X", 5: "Y", 6: "Z", 7: "LB", 8: "RB", 9
              11: "Select", 12: "Start", 13: "Mode", 14: "L3", 15: "R3"}
 PADS = [("Tombol %d%s" % (n, " (%s)" % _PAD_HINT[n] if n in _PAD_HINT else ""), n) for n in range(1, 33)]
 MOUSES = [("Klik kiri", 1), ("Klik kanan", 2), ("Klik tengah", 3)]
-SYSS = [("Naik gigi (manual)", 1), ("Turun gigi (manual)", 2), ("Ganti gigi otomatis/manual", 3),
+SYSS = [("Naik gigi (manual)", 1), ("Turun gigi (manual)", 2), ("Ganti mode gigi", 3),
         ("Kunci gigi", 4), ("Ganti mode output", 5), ("Ganti halaman OLED", 6)]
 CODE_TABLE = {AT_KEY: KEYS, AT_PAD: PADS, AT_MOUSE: MOUSES, AT_SYS: SYSS}
 
@@ -103,12 +103,19 @@ def curve(v, dz, ex):
 
 # ---------- Preset ----------
 PRESETS = {
-    "Mobil, keyboard WASD": {"out_mode": 1, "gear_mode": 0, "rev_logic": 0, "kb_pwm": 1},
-    "Mobil, keyboard + gigi otomatis": {"out_mode": 1, "gear_mode": 1, "rev_logic": 1, "kb_pwm": 1},
+    "Gigi lepas-gas (keyboard, emulator)": {
+        "out_mode": 1, "gear_mode": 3, "rev_logic": 1, "kb_pwm": 1, "kb_pwm_gas": 0,
+        "c3_type": 2, "c4_type": 0, "r_seq": 1, "seq_delay_ms": 500, "rev_auto_ms": 1000,
+        "a_gup": make_act(AT_KEY, ord("e")), "a_gdn": make_act(AT_KEY, ord("q")),
+    },
+    "MSI App Player (keyboard WASD)": {
+        "out_mode": 1, "gear_mode": 0, "rev_logic": 0, "kb_pwm": 1, "kb_pwm_gas": 0, "kb_slot": 20, "kb_dz": 12,
+    },
+    "Mobil, keyboard + gigi otomatis (ambang gas)": {"out_mode": 1, "gear_mode": 1, "rev_logic": 1, "kb_pwm": 1, "r_seq": 0},
     "Gigi manual lewat CH3": {"out_mode": 1, "gear_mode": 2, "rev_logic": 1, "kb_pwm": 1},
     "Gamepad balap": {
         "out_mode": 0, "gear_mode": 0, "rev_logic": 0,
-        "c3_type": 1, "c4_type": 0,
+        "c3_type": 2, "c4_type": 0,
         "a_c3_1": make_act(AT_PAD, 1), "a_c3_2": make_act(AT_PAD, 2), "a_c3_3": make_act(AT_PAD, 4),
         "a_c4_1": make_act(AT_PAD, 5), "a_c4_2": make_act(AT_PAD, 7),
         "a_c4_3": make_act(AT_PAD, 8), "a_c4_l": make_act(AT_PAD, 12),
@@ -118,8 +125,6 @@ PRESETS = {
         "gk3": make_act(AT_PAD, 3), "gk4": make_act(AT_PAD, 4),
         "gk5": make_act(AT_PAD, 5), "gk6": make_act(AT_PAD, 6),
     },
-    "MSI App Player (keyboard WASD)": {"out_mode": 1, "gear_mode": 0, "rev_logic": 0,
-                                      "kb_pwm": 1, "kb_period": 30, "kb_dz": 12},
 }
 
 
@@ -161,3 +166,20 @@ def led_color(cfg, now_ms, sig=True, st=0, gas=0, rev=False):
         br = 0.5 + 0.5 * math.sin(ph * 6.2831853)
         o = (int(cfg["led_r"] * br), int(cfg["led_g"] * br), int(cfg["led_b"] * br))
     return (int(o[0] * k), int(o[1] * k), int(o[2] * k))
+
+
+def short_act(v):
+    """Nama singkat aksi untuk label di gambar remot."""
+    t, c = v >> 8, v & 255
+    if t == AT_NONE:
+        return "tidak ada"
+    for label, code in CODE_TABLE.get(t, []):
+        if code == c:
+            if t == AT_KEY:
+                return "tombol " + label
+            if t == AT_PAD:
+                return "gamepad " + label.split(" (")[0].replace("Tombol ", "")
+            if t == AT_SYS:
+                return {1: "naik gigi", 2: "turun gigi", 3: "ganti mode gigi", 4: "kunci gigi", 5: "ganti output", 6: "halaman OLED"}.get(c, label)
+            return label
+    return "?"
